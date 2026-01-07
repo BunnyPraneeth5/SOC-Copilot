@@ -1,0 +1,100 @@
+# Feature Definitions Configuration
+# Defines all features extracted for ML models
+
+# Global feature settings
+settings:
+  # Time window for aggregations (seconds)
+  default_window: 300
+  # Entity types for grouping
+  entity_types:
+    - user
+    - src_ip
+    - dst_ip
+    - host
+
+# Statistical Features
+statistical:
+  enabled: true
+  features:
+    - name: event_count
+      description: Number of events per entity in window
+      aggregation: count
+      
+    - name: unique_destinations
+      description: Unique destination IPs/hosts contacted
+      aggregation: nunique
+      field: dst_ip
+      
+    - name: port_entropy
+      description: Entropy of destination ports used
+      aggregation: entropy
+      field: dst_port
+      
+    - name: bytes_total
+      description: Total bytes transferred
+      aggregation: sum
+      field: bytes
+
+# Temporal Features
+temporal:
+  enabled: true
+  features:
+    - name: hour_of_day
+      description: Hour when event occurred (0-23)
+      type: extract
+      component: hour
+      
+    - name: day_of_week
+      description: Day of week (0=Monday, 6=Sunday)
+      type: extract
+      component: dayofweek
+      
+    - name: is_business_hours
+      description: Whether event is during business hours
+      type: boolean
+      business_start: 9
+      business_end: 17
+      
+    - name: time_since_last
+      description: Seconds since last event from same entity
+      type: delta
+      entity_field: src_ip
+
+# Behavioral Features
+behavioral:
+  enabled: true
+  features:
+    - name: session_duration
+      description: Duration of session in seconds
+      type: duration
+      
+    - name: request_rate
+      description: Requests per second
+      type: rate
+      
+    - name: deviation_from_baseline
+      description: Standard deviations from entity baseline
+      type: zscore
+      baseline_window: 86400  # 24 hours
+
+# Network Features
+network:
+  enabled: true
+  features:
+    - name: ip_rarity_score
+      description: How rare is this IP in recent history
+      type: rarity
+      field: src_ip
+      lookback: 604800  # 7 days
+      
+    - name: protocol_anomaly
+      description: Unusual protocol for this entity
+      type: categorical_anomaly
+      field: protocol
+      
+    - name: port_scan_indicator
+      description: High number of unique ports in short window
+      type: threshold
+      field: unique_ports
+      threshold: 50
+      window: 60

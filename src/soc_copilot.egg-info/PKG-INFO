@@ -1,0 +1,80 @@
+Metadata-Version: 2.4
+Name: soc-copilot
+Version: 0.1.0
+Summary: Offline SOC Copilot with hybrid ML (Isolation Forest + Random Forest)
+Author: SOC Copilot Team
+License: MIT
+Keywords: security,soc,anomaly-detection,machine-learning
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Information Technology
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Topic :: Security
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: scikit-learn>=1.3.0
+Requires-Dist: numpy>=1.24.0
+Requires-Dist: pandas>=2.0.0
+Requires-Dist: joblib>=1.3.0
+Requires-Dist: pydantic>=2.0.0
+Requires-Dist: pydantic-settings>=2.0.0
+Requires-Dist: pyyaml>=6.0.0
+Requires-Dist: python-evtx>=0.8.0
+Requires-Dist: PyQt6>=6.5.0
+Requires-Dist: structlog>=23.1.0
+Requires-Dist: python-dateutil>=2.8.0
+Provides-Extra: dev
+Requires-Dist: pytest>=7.4.0; extra == "dev"
+Requires-Dist: pytest-cov>=4.1.0; extra == "dev"
+Requires-Dist: black>=23.7.0; extra == "dev"
+Requires-Dist: ruff>=0.0.280; extra == "dev"
+Requires-Dist: mypy>=1.4.0; extra == "dev"
+Requires-Dist: pre-commit>=3.3.0; extra == "dev"
+
+# SOC Copilot
+
+A fully offline, desktop-based Security Operations Center (SOC) Copilot application using hybrid ML (Isolation Forest + Random Forest) for threat detection.
+
+## Features
+
+- **Hybrid ML Approach**: Isolation Forest for unsupervised anomaly detection + Random Forest for supervised attack classification
+- **Fully Offline**: All inference runs locally on your machine
+- **Modular Architecture**: Designed for future extensibility (Autoencoder, Transformer, etc.)
+- **SOC Analyst Focused**: Every feature prioritizes analyst workflow and explainability
+
+## Installation
+
+```bash
+pip install -e .
+```
+
+## Project Structure
+
+```
+src/
+├── data/                    # Data layer
+│   ├── log_ingestion/       # Log parsers and validators
+│   ├── preprocessing/       # Data cleaning and normalization
+│   └── feature_engineering/ # Feature extraction
+├── models/                  # ML Core layer
+│   ├── isolation_forest/    # Anomaly detection
+│   ├── random_forest/       # Attack classification
+│   └── ensemble_controller.py
+├── intelligence/            # Intelligence layer
+│   ├── alert_engine.py
+│   └── context_enrichment.py
+└── ui/                      # Presentation layer
+```
+
+## Configuration
+
+Configuration files are in `config/`:
+- `thresholds.yaml` - Alert thresholds
+- `features.yaml` - Feature definitions
+- `model_config.yaml` - Model parameters
+
+## License
+
+MIT

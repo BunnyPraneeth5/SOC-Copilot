@@ -1,0 +1,84 @@
+# Model Configuration
+# Parameters for ML models used in SOC Copilot
+
+# Isolation Forest Configuration
+isolation_forest:
+  # Algorithm parameters
+  n_estimators: 100
+  max_samples: "auto"  # Number of samples to train each tree
+  contamination: 0.1   # Expected proportion of anomalies
+  max_features: 1.0    # Features per tree
+  bootstrap: false
+  random_state: 42
+  
+  # Training settings
+  training:
+    min_samples: 1000      # Minimum samples needed to train
+    baseline_days: 7       # Days of "normal" data for baseline
+    retrain_trigger: 10000 # New samples before retraining
+
+  # Inference settings
+  inference:
+    batch_size: 1000
+    
+  # Persistence
+  model_path: "data/models/isolation_forest"
+  version_format: "if_v{version}_{timestamp}.joblib"
+
+# Random Forest Configuration
+random_forest:
+  # Algorithm parameters
+  n_estimators: 100
+  max_depth: 20
+  min_samples_split: 5
+  min_samples_leaf: 2
+  max_features: "sqrt"
+  class_weight: "balanced"  # Handle class imbalance
+  random_state: 42
+  n_jobs: -1  # Use all CPU cores
+  
+  # Classes for classification
+  classes:
+    - Benign
+    - DDoS
+    - BruteForce
+    - Malware
+    - Exfiltration
+    - Reconnaissance
+    - Injection
+    
+  # Training settings
+  training:
+    min_samples_per_class: 100
+    test_split: 0.2
+    cross_validation_folds: 5
+    
+  # Inference settings
+  inference:
+    batch_size: 1000
+    return_probabilities: true
+    
+  # Persistence
+  model_path: "data/models/random_forest"
+  version_format: "rf_v{version}_{timestamp}.joblib"
+
+# Ensemble Controller Configuration
+ensemble:
+  # Model loading
+  load_on_startup: true
+  fallback_to_default: true
+  
+  # Parallel inference
+  parallel_inference: true
+  timeout_seconds: 30
+  
+  # Decision fusion parameters (matches thresholds.yaml weights)
+  fusion:
+    if_weight: 0.4
+    rf_weight: 0.4
+    context_weight: 0.2
+
+# Future: Autoencoder placeholder
+autoencoder:
+  enabled: false
+  # Will be configured in Phase-2

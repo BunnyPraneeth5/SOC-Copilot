@@ -1,0 +1,2 @@
+[console_scripts]
+soc-copilot = soc_copilot.main:main

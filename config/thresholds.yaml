@@ -1,0 +1,48 @@
+# Alert Thresholds Configuration
+# Configures when and how alerts are generated based on ML model outputs
+
+# Isolation Forest anomaly score thresholds
+anomaly:
+  # Scores below this are considered normal (no alert)
+  low_threshold: 0.3
+  # Scores at or above this are considered high anomaly
+  high_threshold: 0.7
+
+# Priority calculation weights (must sum to 1.0)
+weights:
+  isolation_forest: 0.4  # Anomaly detection weight
+  random_forest: 0.4     # Classification confidence weight
+  context: 0.2           # Business context weight
+
+# Random Forest classification confidence thresholds
+classification:
+  # Minimum confidence to trust classification
+  min_confidence: 0.7
+  # Below this confidence, flag as "Unknown"
+  unknown_threshold: 0.3
+
+# Alert priority thresholds (based on final calculated score)
+priority:
+  critical: 0.85
+  high: 0.70
+  medium: 0.50
+  low: 0.30
+  # Below low threshold = PASS (no alert)
+
+# Deduplication settings
+deduplication:
+  # Time window for grouping related alerts (seconds)
+  window_seconds: 300
+  # Fields to use for grouping
+  group_by:
+    - src_ip
+    - dst_ip
+    - attack_class
+
+# Conservative mode settings (default: reduce alert fatigue)
+conservative_mode:
+  enabled: true
+  # Require multiple signals before alerting
+  min_signals: 2
+  # Never auto-suppress high IF scores
+  never_suppress_high_anomaly: true
