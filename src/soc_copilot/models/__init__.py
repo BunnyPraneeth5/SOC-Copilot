@@ -11,6 +11,19 @@ from soc_copilot.models.training import (
     DataLoaderConfig,
     SOC_LABELS,
 )
+from soc_copilot.models.ensemble import (
+    EnsembleCoordinator,
+    EnsembleConfig,
+    EnsembleResult,
+    RiskLevel,
+    AlertPriority,
+    ThreatCategory,
+    AlertGenerator,
+    Alert,
+    AnalysisPipeline,
+    create_analysis_pipeline,
+    format_alert_summary,
+)
 
 __all__ = [
     # Inference
@@ -22,4 +35,16 @@ __all__ = [
     "TrainingDataLoader",
     "DataLoaderConfig",
     "SOC_LABELS",
+    # Ensemble
+    "EnsembleCoordinator",
+    "EnsembleConfig",
+    "EnsembleResult",
+    "RiskLevel",
+    "AlertPriority",
+    "ThreatCategory",
+    "AlertGenerator",
+    "Alert",
+    "AnalysisPipeline",
+    "create_analysis_pipeline",
+    "format_alert_summary",
 ]
