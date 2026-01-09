@@ -1,0 +1,7 @@
+[
+    {"timestamp": "2026-01-07T10:00:00Z", "src_ip": "192.168.1.100", "dst_ip": "10.0.0.1", "action": "login", "user": "alice", "status": "success"},
+    {"timestamp": "2026-01-07T10:01:00Z", "src_ip": "192.168.1.101", "dst_ip": "10.0.0.1", "action": "login", "user": "bob", "status": "failed"},
+    {"timestamp": "2026-01-07T10:02:00Z", "src_ip": "192.168.1.100", "dst_ip": "10.0.0.2", "action": "file_access", "user": "alice", "file": "/data/secrets.txt"},
+    {"timestamp": "2026-01-07T10:03:00Z", "src_ip": "192.168.1.102", "dst_ip": "10.0.0.1", "action": "login", "user": "charlie", "status": "success"},
+    {"timestamp": "2026-01-07T10:04:00Z", "src_ip": "192.168.1.100", "dst_ip": "10.0.0.3", "action": "network_scan", "user": "alice", "ports_scanned": 1024}
+]

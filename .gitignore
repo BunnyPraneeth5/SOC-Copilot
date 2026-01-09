@@ -1,0 +1,4 @@
+data/datasets/
+data/logs/
+data/models/*.joblib
+tests/fixtures/*.evtx

@@ -1,0 +1,5 @@
+{"timestamp": "2026-01-07T10:00:00Z", "event": "connection", "src_ip": "192.168.1.1", "dst_ip": "8.8.8.8"}
+{"timestamp": "2026-01-07T10:00:01Z", "event": "dns_query", "query": "example.com", "response": "93.184.216.34"}
+{"timestamp": "2026-01-07T10:00:02Z", "event": "connection", "src_ip": "192.168.1.2", "dst_ip": "1.1.1.1"}
+{"timestamp": "2026-01-07T10:00:03Z", "event": "http_request", "url": "https://example.com/api", "method": "GET", "status": 200}
+{"timestamp": "2026-01-07T10:00:04Z", "event": "file_download", "filename": "report.pdf", "size_bytes": 1048576}
