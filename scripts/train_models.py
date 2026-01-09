@@ -14,14 +14,13 @@ Requirements:
 """
 
 import argparse
+import importlib.util
 import sys
 from pathlib import Path
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root / "src"))
-sys.path.insert(0, str(project_root / "models" / "isolation_forest"))
-sys.path.insert(0, str(project_root / "models" / "random_forest"))
 
 import numpy as np
 
@@ -31,11 +30,15 @@ from soc_copilot.models.training.data_loader import (
 )
 from soc_copilot.core.logging import get_logger
 
-# Import trainers from models directory
-from trainer import IsolationForestTrainer, IsolationForestConfig
-
-
 logger = get_logger(__name__)
+
+
+def load_module(name: str, filepath: Path):
+    """Load a Python module from filepath."""
+    spec = importlib.util.spec_from_file_location(name, filepath)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def parse_args():
@@ -89,6 +92,16 @@ def main():
     print(f"\n{'='*60}")
     print("SOC Copilot Model Training")
     print(f"{'='*60}\n")
+    
+    # Load trainer modules using importlib
+    if_module = load_module(
+        "if_trainer",
+        project_root / "models" / "isolation_forest" / "trainer.py"
+    )
+    rf_module = load_module(
+        "rf_trainer", 
+        project_root / "models" / "random_forest" / "trainer.py"
+    )
     
     # Initialize data loader
     loader_config = DataLoaderConfig(
@@ -147,11 +160,11 @@ def main():
     if len(X_benign) == 0:
         print("WARNING: No benign samples found. Skipping Isolation Forest training.")
     else:
-        if_config = IsolationForestConfig(
+        if_config = if_module.IsolationForestConfig(
             n_estimators=args.n_estimators,
             model_output_dir=args.output_dir,
         )
-        if_trainer = IsolationForestTrainer(if_config)
+        if_trainer = if_module.IsolationForestTrainer(if_config)
         if_trainer.train(X_benign, feature_names)
         
         # Evaluate on test set
@@ -176,15 +189,11 @@ def main():
     print("Training Random Forest (Multi-class)")
     print(f"{'='*60}\n")
     
-    # Need to import from random_forest trainer
-    sys.path.insert(0, str(project_root / "models" / "random_forest"))
-    from trainer import RandomForestTrainer, RandomForestConfig
-    
-    rf_config = RandomForestConfig(
+    rf_config = rf_module.RandomForestConfig(
         n_estimators=args.n_estimators,
         model_output_dir=args.output_dir,
     )
-    rf_trainer = RandomForestTrainer(rf_config)
+    rf_trainer = rf_module.RandomForestTrainer(rf_config)
     
     train_stats = rf_trainer.train(
         X_train, y_train, feature_names,
