@@ -245,3 +245,25 @@ def parse_log_file(
         List of parsed records
     """
     return get_parser_factory().parse(filepath, format_hint)
+
+
+def parse_log_directory(
+    dirpath: str | Path,
+    recursive: bool = True,
+    format_hint: str | None = None,
+) -> list[ParsedRecord]:
+    """Convenience function to parse all log files in a directory.
+    
+    Args:
+        dirpath: Path to the directory
+        recursive: Whether to search recursively
+        format_hint: Optional format hint
+        
+    Returns:
+        List of all parsed records from all files
+    """
+    results = get_parser_factory().parse_directory(dirpath, recursive, format_hint)
+    all_records = []
+    for records in results.values():
+        all_records.extend(records)
+    return all_records
