@@ -1,0 +1,92 @@
+"""Live alerts table view"""
+
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QTableWidget, QTableWidgetItem, QHeaderView
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+
+
+class AlertsView(QWidget):
+    """Live alerts table with auto-refresh"""
+    
+    alert_selected = pyqtSignal(str, str)  # batch_id, alert_id
+    
+    def __init__(self, bridge):
+        super().__init__()
+        self.bridge = bridge
+        self._init_ui()
+        
+        # Auto-refresh every 3 seconds
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.refresh)
+        self.timer.start(3000)
+    
+    def _init_ui(self):
+        layout = QVBoxLayout()
+        
+        # Table
+        self.table = QTableWidget()
+        self.table.setColumnCount(6)
+        self.table.setHorizontalHeaderLabels([
+            "Time", "Priority", "Classification", "Source IP", "Confidence", "Batch ID"
+        ])
+        
+        # Configure table
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.itemClicked.connect(self._on_row_clicked)
+        
+        layout.addWidget(self.table)
+        self.setLayout(layout)
+    
+    def refresh(self):
+        """Refresh alerts table"""
+        try:
+            results = self.bridge.get_latest_alerts(limit=50)
+            
+            # Collect all alerts
+            alerts_data = []
+            for result in results:
+                for alert in result.alerts:
+                    alerts_data.append({
+                        "batch_id": result.batch_id,
+                        "alert_id": alert.alert_id,
+                        "time": alert.timestamp.strftime("%H:%M:%S"),
+                        "priority": alert.priority,
+                        "classification": alert.classification,
+                        "source_ip": alert.source_ip or "N/A",
+                        "confidence": f"{alert.confidence:.2f}"
+                    })
+            
+            # Update table
+            self.table.setRowCount(len(alerts_data))
+            
+            for row, alert in enumerate(alerts_data):
+                self.table.setItem(row, 0, QTableWidgetItem(alert["time"]))
+                self.table.setItem(row, 1, QTableWidgetItem(alert["priority"]))
+                self.table.setItem(row, 2, QTableWidgetItem(alert["classification"]))
+                self.table.setItem(row, 3, QTableWidgetItem(alert["source_ip"]))
+                self.table.setItem(row, 4, QTableWidgetItem(alert["confidence"]))
+                self.table.setItem(row, 5, QTableWidgetItem(alert["batch_id"]))
+                
+                # Color by priority
+                if "Critical" in alert["priority"]:
+                    color = Qt.GlobalColor.red
+                elif "High" in alert["priority"]:
+                    color = Qt.GlobalColor.darkYellow
+                else:
+                    color = Qt.GlobalColor.white
+                
+                for col in range(6):
+                    item = self.table.item(row, col)
+                    if item:
+                        item.setForeground(color)
+        
+        except Exception:
+            pass
+    
+    def _on_row_clicked(self, item):
+        """Handle row click"""
+        row = item.row()
+        batch_id = self.table.item(row, 5).text()
+        alert_id = self.table.item(row, 2).text()  # Use classification as identifier
+        self.alert_selected.emit(batch_id, alert_id)
