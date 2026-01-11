@@ -27,6 +27,9 @@ from soc_copilot.core.logging import get_logger
 from soc_copilot.phase2.feedback.store import FeedbackStore
 from soc_copilot.phase2.drift.monitor import DriftMonitor
 from soc_copilot.phase2.calibration.recommender import ThresholdCalibrator
+from soc_copilot.phase3.governance import (
+    GovernancePolicy, ApprovalWorkflow, KillSwitch, AuditLogger
+)
 
 logger = get_logger(__name__)
 
@@ -178,6 +181,50 @@ Examples:
     # Calibrate rollback
     calibrate_rollback = calibrate_subparsers.add_parser("rollback", help="Rollback to previous config")
     calibrate_rollback.add_argument("--index", type=int, default=0, help="Backup index (0=most recent)")
+    
+    # Governance command (Sprint-13)
+    governance_parser = subparsers.add_parser(
+        "governance",
+        help="Governance & control layer (manual operations only)",
+    )
+    governance_subparsers = governance_parser.add_subparsers(dest="governance_command")
+    
+    # Governance status
+    governance_status = governance_subparsers.add_parser("status", help="Show governance status")
+    
+    # Governance request
+    governance_request = governance_subparsers.add_parser("request", help="Create approval request")
+    governance_request.add_argument("--action", required=True, help="Action to request")
+    governance_request.add_argument("--reason", required=True, help="Justification")
+    governance_request.add_argument("--requester", required=True, help="Requester name")
+    
+    # Governance approve
+    governance_approve = governance_subparsers.add_parser("approve", help="Approve request")
+    governance_approve.add_argument("--request-id", required=True, help="Request ID")
+    governance_approve.add_argument("--reviewer", required=True, help="Reviewer name")
+    governance_approve.add_argument("--notes", help="Review notes")
+    
+    # Governance reject
+    governance_reject = governance_subparsers.add_parser("reject", help="Reject request")
+    governance_reject.add_argument("--request-id", required=True, help="Request ID")
+    governance_reject.add_argument("--reviewer", required=True, help="Reviewer name")
+    governance_reject.add_argument("--notes", help="Review notes")
+    
+    # Governance revoke
+    governance_revoke = governance_subparsers.add_parser("revoke", help="Revoke approved request")
+    governance_revoke.add_argument("--request-id", required=True, help="Request ID")
+    governance_revoke.add_argument("--reviewer", required=True, help="Reviewer name")
+    governance_revoke.add_argument("--notes", help="Revocation notes")
+    
+    # Governance disable
+    governance_disable = governance_subparsers.add_parser("disable", help="Enable kill switch (disable Phase-3)")
+    governance_disable.add_argument("--actor", required=True, help="Actor name")
+    governance_disable.add_argument("--reason", required=True, help="Reason")
+    
+    # Governance enable
+    governance_enable = governance_subparsers.add_parser("enable", help="Disable kill switch (enable Phase-3)")
+    governance_enable.add_argument("--actor", required=True, help="Actor name")
+    governance_enable.add_argument("--reason", required=True, help="Reason")
     
     return parser
 
@@ -642,6 +689,190 @@ def cmd_status(args) -> int:
     return 0
 
 
+def cmd_governance(args) -> int:
+    """Run governance command (Sprint-13)."""
+    db_path = "data/governance/governance.db"
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    
+    if args.governance_command == "status":
+        # Show governance status
+        policy = GovernancePolicy("config/governance/policy.yaml")
+        killswitch = KillSwitch(db_path)
+        workflow = ApprovalWorkflow(db_path)
+        audit = AuditLogger(db_path)
+        
+        print("\nGovernance Status")
+        print("=" * 60)
+        
+        # Kill switch
+        ks_state = killswitch.get_state()
+        print(f"\nKill Switch: {'ENABLED' if ks_state['enabled'] else 'DISABLED'}")
+        print(f"  Phase-3 Status: {ks_state['phase3_status'].upper()}")
+        if ks_state['last_changed']:
+            print(f"  Last Changed: {ks_state['last_changed']}")
+            print(f"  Changed By: {ks_state['changed_by']}")
+            print(f"  Reason: {ks_state['reason']}")
+        
+        # Policy
+        policy_dict = policy.to_dict()
+        print(f"\nAuthority State: {policy_dict['current_state'].upper()}")
+        print(f"  Permitted Components: {', '.join(policy_dict['permitted_components']) if policy_dict['permitted_components'] else 'None'}")
+        
+        # Approval requests
+        pending = workflow.list_requests()
+        print(f"\nApproval Requests: {len(pending)} total")
+        
+        # Audit log
+        event_count = audit.get_event_count()
+        print(f"\nAudit Events: {event_count}")
+        
+        print()
+        return 0
+    
+    elif args.governance_command == "request":
+        # Create approval request
+        workflow = ApprovalWorkflow(db_path)
+        audit = AuditLogger(db_path)
+        
+        import uuid
+        request_id = str(uuid.uuid4())
+        
+        request = workflow.create_request(
+            request_id=request_id,
+            requester=args.requester,
+            action=args.action,
+            reason=args.reason
+        )
+        
+        # Audit event
+        audit.log_event(
+            actor=args.requester,
+            action=f"approval_request_created:{args.action}",
+            reason=args.reason
+        )
+        
+        print(f"\nApproval request created: {request_id}")
+        print(f"  Requester: {args.requester}")
+        print(f"  Action: {args.action}")
+        print(f"  Status: REQUESTED")
+        return 0
+    
+    elif args.governance_command == "approve":
+        # Approve request (NO side effects)
+        workflow = ApprovalWorkflow(db_path)
+        audit = AuditLogger(db_path)
+        
+        request = workflow.approve_request(
+            request_id=args.request_id,
+            reviewer=args.reviewer,
+            notes=args.notes
+        )
+        
+        # Audit event
+        audit.log_event(
+            actor=args.reviewer,
+            action=f"approval_granted:{request.action}",
+            reason=args.notes or "Approved"
+        )
+        
+        print(f"\nRequest approved: {args.request_id}")
+        print(f"  Reviewer: {args.reviewer}")
+        print(f"  Status: APPROVED")
+        print(f"\nNOTE: Approval does NOT activate anything.")
+        print(f"      Manual implementation required.")
+        return 0
+    
+    elif args.governance_command == "reject":
+        # Reject request
+        workflow = ApprovalWorkflow(db_path)
+        audit = AuditLogger(db_path)
+        
+        request = workflow.reject_request(
+            request_id=args.request_id,
+            reviewer=args.reviewer,
+            notes=args.notes
+        )
+        
+        # Audit event
+        audit.log_event(
+            actor=args.reviewer,
+            action=f"approval_rejected:{request.action}",
+            reason=args.notes or "Rejected"
+        )
+        
+        print(f"\nRequest rejected: {args.request_id}")
+        print(f"  Reviewer: {args.reviewer}")
+        print(f"  Status: REJECTED")
+        return 0
+    
+    elif args.governance_command == "revoke":
+        # Revoke approved request
+        workflow = ApprovalWorkflow(db_path)
+        audit = AuditLogger(db_path)
+        
+        request = workflow.revoke_request(
+            request_id=args.request_id,
+            reviewer=args.reviewer,
+            notes=args.notes
+        )
+        
+        # Audit event
+        audit.log_event(
+            actor=args.reviewer,
+            action=f"approval_revoked:{request.action}",
+            reason=args.notes or "Revoked"
+        )
+        
+        print(f"\nRequest revoked: {args.request_id}")
+        print(f"  Reviewer: {args.reviewer}")
+        print(f"  Status: REVOKED")
+        return 0
+    
+    elif args.governance_command == "disable":
+        # Enable kill switch (disable Phase-3)
+        killswitch = KillSwitch(db_path)
+        audit = AuditLogger(db_path)
+        
+        killswitch.enable(actor=args.actor, reason=args.reason)
+        
+        # Audit event
+        audit.log_event(
+            actor=args.actor,
+            action="killswitch_enabled",
+            reason=args.reason
+        )
+        
+        print(f"\nKill switch ENABLED")
+        print(f"  Phase-3 Status: DISABLED")
+        print(f"  Actor: {args.actor}")
+        print(f"  Reason: {args.reason}")
+        return 0
+    
+    elif args.governance_command == "enable":
+        # Disable kill switch (enable Phase-3)
+        killswitch = KillSwitch(db_path)
+        audit = AuditLogger(db_path)
+        
+        killswitch.disable(actor=args.actor, reason=args.reason)
+        
+        # Audit event
+        audit.log_event(
+            actor=args.actor,
+            action="killswitch_disabled",
+            reason=args.reason
+        )
+        
+        print(f"\nKill switch DISABLED")
+        print(f"  Phase-3 Status: ENABLED")
+        print(f"  Actor: {args.actor}")
+        print(f"  Reason: {args.reason}")
+        return 0
+    
+    else:
+        print("Use 'status', 'request', 'approve', 'reject', 'revoke', 'disable', or 'enable' subcommand")
+        return 1
+
+
 def main() -> int:
     """Main entry point."""
     parser = setup_parser()
@@ -661,6 +892,8 @@ def main() -> int:
         return cmd_drift(args)
     elif args.command == "calibrate":
         return cmd_calibrate(args)
+    elif args.command == "governance":
+        return cmd_governance(args)
     
     return 0
 
