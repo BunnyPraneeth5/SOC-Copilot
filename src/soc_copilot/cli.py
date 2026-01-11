@@ -25,6 +25,7 @@ from soc_copilot.pipeline import SOCCopilot, SOCCopilotConfig, create_soc_copilo
 from soc_copilot.models.ensemble import format_alert_summary, RiskLevel
 from soc_copilot.core.logging import get_logger
 from soc_copilot.phase2.feedback.store import FeedbackStore
+from soc_copilot.phase2.drift.monitor import DriftMonitor
 
 logger = get_logger(__name__)
 
@@ -135,6 +136,26 @@ Examples:
     
     # Feedback stats
     feedback_stats = feedback_subparsers.add_parser("stats", help="Show statistics")
+    
+    # Drift command
+    drift_parser = subparsers.add_parser(
+        "drift",
+        help="Monitor model drift",
+    )
+    drift_subparsers = drift_parser.add_subparsers(dest="drift_command")
+    
+    # Drift report
+    drift_report = drift_subparsers.add_parser("report", help="Show latest drift report")
+    drift_report.add_argument("--window", type=int, default=100, help="Window size")
+    drift_report.add_argument("--baseline", type=int, default=100, help="Baseline size")
+    
+    # Drift history
+    drift_history = drift_subparsers.add_parser("history", help="Show drift history")
+    drift_history.add_argument("--limit", type=int, default=10, help="Number of reports")
+    
+    # Drift export
+    drift_export = drift_subparsers.add_parser("export", help="Export drift data")
+    drift_export.add_argument("--output", required=True, help="Output JSON file")
     
     return parser
 
@@ -290,6 +311,84 @@ def cmd_analyze(args) -> int:
     return 0
 
 
+def cmd_drift(args) -> int:
+    """Run drift command."""
+    monitor = DriftMonitor()
+    monitor.initialize()
+    
+    try:
+        if args.drift_command == "report":
+            report = monitor.compute_drift_report(
+                window_size=args.window,
+                baseline_size=args.baseline
+            )
+            
+            print("\nDrift Monitoring Report")
+            print("=" * 60)
+            print(f"Timestamp: {report.timestamp}")
+            print(f"Window Size: {report.window_size}")
+            print(f"Baseline Size: {report.baseline_size}")
+            
+            print("\nOutput Metrics:")
+            print(f"  Anomaly Score: {report.anomaly_score_mean:.3f} ± {report.anomaly_score_std:.3f}")
+            print(f"  Risk Score: {report.risk_score_mean:.3f} ± {report.risk_score_std:.3f}")
+            
+            if report.class_distribution:
+                print("\n  Class Distribution:")
+                for cls, count in sorted(report.class_distribution.items(), key=lambda x: -x[1]):
+                    pct = count / report.window_size * 100
+                    print(f"    {cls}: {count} ({pct:.1f}%)")
+            
+            if report.priority_distribution:
+                print("\n  Priority Distribution:")
+                for pri, count in sorted(report.priority_distribution.items()):
+                    pct = count / report.window_size * 100
+                    print(f"    {pri}: {count} ({pct:.1f}%)")
+            
+            print("\nDrift Detection:")
+            print(f"  Anomaly Drift: {report.anomaly_drift.value} ({report.anomaly_change_pct:+.1f}%)")
+            print(f"  Risk Drift: {report.risk_drift.value} ({report.risk_change_pct:+.1f}%)")
+            print(f"  Class Drift: {report.class_drift.value}")
+            
+            print()
+            return 0
+            
+        elif args.drift_command == "history":
+            history = monitor.get_report_history(limit=args.limit)
+            
+            if not history:
+                print("No drift reports found.")
+                return 0
+            
+            print(f"\nDrift Report History ({len(history)} reports)")
+            print("=" * 60)
+            
+            for i, report_data in enumerate(history, 1):
+                print(f"\n{i}. {report_data['timestamp']}")
+                print(f"   Window: {report_data['window_size']}, Baseline: {report_data['baseline_size']}")
+                print(f"   Drift: Anomaly={report_data['drift']['anomaly']}, Risk={report_data['drift']['risk']}, Class={report_data['drift']['class']}")
+            
+            print()
+            return 0
+            
+        elif args.drift_command == "export":
+            history = monitor.get_report_history(limit=1000)
+            
+            output_path = Path(args.output)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            with open(output_path, "w") as f:
+                json.dump({"reports": history}, f, indent=2)
+            
+            print(f"Exported {len(history)} drift reports to: {args.output}")
+            return 0
+        else:
+            print("Use 'report', 'history', or 'export' subcommand")
+            return 1
+    finally:
+        monitor.close()
+
+
 def cmd_feedback(args) -> int:
     """Run feedback command."""
     store = FeedbackStore()
@@ -400,6 +499,8 @@ def main() -> int:
         return cmd_status(args)
     elif args.command == "feedback":
         return cmd_feedback(args)
+    elif args.command == "drift":
+        return cmd_drift(args)
     
     return 0
 

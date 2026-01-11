@@ -12,8 +12,16 @@ from soc_copilot.phase2.feedback import (
     FeedbackStore,
     FeedbackStats,
 )
+from soc_copilot.phase2.drift import (
+    DriftMonitor,
+    DriftReport,
+    DriftLevel,
+)
 
 __all__ = [
     "FeedbackStore",
     "FeedbackStats",
+    "DriftMonitor",
+    "DriftReport",
+    "DriftLevel",
 ]
