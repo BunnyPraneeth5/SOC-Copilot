@@ -24,6 +24,7 @@ sys.path.insert(0, str(project_root / "src"))
 from soc_copilot.pipeline import SOCCopilot, SOCCopilotConfig, create_soc_copilot
 from soc_copilot.models.ensemble import format_alert_summary, RiskLevel
 from soc_copilot.core.logging import get_logger
+from soc_copilot.phase2.feedback.store import FeedbackStore
 
 logger = get_logger(__name__)
 
@@ -112,6 +113,28 @@ Examples:
         default="data/models",
         help="Path to trained models directory",
     )
+    
+    # Feedback command
+    feedback_parser = subparsers.add_parser(
+        "feedback",
+        help="Manage analyst feedback on alerts",
+    )
+    feedback_subparsers = feedback_parser.add_subparsers(dest="feedback_command")
+    
+    # Feedback add
+    feedback_add = feedback_subparsers.add_parser("add", help="Record feedback")
+    feedback_add.add_argument("--alert-id", required=True, help="Alert ID")
+    feedback_add.add_argument(
+        "--action",
+        required=True,
+        choices=["accept", "reject", "reclassify"],
+        help="Analyst action"
+    )
+    feedback_add.add_argument("--label", help="New label (required if reclassify)")
+    feedback_add.add_argument("--comment", help="Optional comment")
+    
+    # Feedback stats
+    feedback_stats = feedback_subparsers.add_parser("stats", help="Show statistics")
     
     return parser
 
@@ -267,6 +290,55 @@ def cmd_analyze(args) -> int:
     return 0
 
 
+def cmd_feedback(args) -> int:
+    """Run feedback command."""
+    store = FeedbackStore()
+    store.initialize()
+    
+    try:
+        if args.feedback_command == "add":
+            if args.action == "reclassify" and not args.label:
+                print("Error: --label is required when action is 'reclassify'")
+                return 1
+            
+            record_id = store.add_feedback(
+                alert_id=args.alert_id,
+                analyst_action=args.action,
+                analyst_label=args.label,
+                comment=args.comment,
+            )
+            
+            print(f"Feedback recorded (ID: {record_id})")
+            print(f"  Alert: {args.alert_id}")
+            print(f"  Action: {args.action}")
+            if args.label:
+                print(f"  Label: {args.label}")
+            return 0
+            
+        elif args.feedback_command == "stats":
+            stats = store.get_feedback_stats()
+            
+            print("\nFeedback Statistics")
+            print("=" * 40)
+            print(f"Total: {stats.total_count}")
+            print(f"  Accept: {stats.accept_count}")
+            print(f"  Reject: {stats.reject_count}")
+            print(f"  Reclassify: {stats.reclassify_count}")
+            
+            if stats.by_label:
+                print(f"\nReclassified Labels:")
+                for label, count in sorted(stats.by_label.items(), key=lambda x: -x[1]):
+                    print(f"  {label}: {count}")
+            
+            print()
+            return 0
+        else:
+            print("Use 'add' or 'stats' subcommand")
+            return 1
+    finally:
+        store.close()
+
+
 def cmd_status(args) -> int:
     """Run status command."""
     models_dir = Path(args.models_dir)
@@ -326,6 +398,8 @@ def main() -> int:
         return cmd_analyze(args)
     elif args.command == "status":
         return cmd_status(args)
+    elif args.command == "feedback":
+        return cmd_feedback(args)
     
     return 0
 
