@@ -26,6 +26,7 @@ from soc_copilot.models.ensemble import format_alert_summary, RiskLevel
 from soc_copilot.core.logging import get_logger
 from soc_copilot.phase2.feedback.store import FeedbackStore
 from soc_copilot.phase2.drift.monitor import DriftMonitor
+from soc_copilot.phase2.calibration.recommender import ThresholdCalibrator
 
 logger = get_logger(__name__)
 
@@ -156,6 +157,27 @@ Examples:
     # Drift export
     drift_export = drift_subparsers.add_parser("export", help="Export drift data")
     drift_export.add_argument("--output", required=True, help="Output JSON file")
+    
+    # Calibrate command
+    calibrate_parser = subparsers.add_parser(
+        "calibrate",
+        help="Threshold calibration (manual approval required)",
+    )
+    calibrate_subparsers = calibrate_parser.add_subparsers(dest="calibrate_command")
+    
+    # Calibrate recommend
+    calibrate_recommend = calibrate_subparsers.add_parser("recommend", help="Show recommended threshold changes")
+    
+    # Calibrate preview
+    calibrate_preview = calibrate_subparsers.add_parser("preview", help="Preview threshold changes")
+    
+    # Calibrate apply
+    calibrate_apply = calibrate_subparsers.add_parser("apply", help="Apply threshold changes")
+    calibrate_apply.add_argument("--confirm", action="store_true", help="Confirm application (required)")
+    
+    # Calibrate rollback
+    calibrate_rollback = calibrate_subparsers.add_parser("rollback", help="Rollback to previous config")
+    calibrate_rollback.add_argument("--index", type=int, default=0, help="Backup index (0=most recent)")
     
     return parser
 
@@ -309,6 +331,142 @@ def cmd_analyze(args) -> int:
     elif any(a.priority.value == "P1-High" for a in filtered_alerts):
         return 1  # High alerts
     return 0
+
+
+def cmd_calibrate(args) -> int:
+    """Run calibrate command."""
+    calibrator = ThresholdCalibrator()
+    
+    if args.calibrate_command == "recommend":
+        # Get drift and feedback stats
+        drift_monitor = DriftMonitor()
+        drift_monitor.initialize()
+        drift_report = drift_monitor.get_latest_report()
+        drift_monitor.close()
+        
+        feedback_store = FeedbackStore()
+        feedback_store.initialize()
+        feedback_stats = feedback_store.get_feedback_stats()
+        feedback_store.close()
+        
+        # Generate recommendations
+        drift_dict = drift_report.to_dict() if drift_report else {}
+        feedback_dict = {
+            "total_count": feedback_stats.total_count,
+            "reject_count": feedback_stats.reject_count,
+        }
+        
+        rec = calibrator.generate_recommendations(drift_dict, feedback_dict)
+        
+        if not rec.has_recommendations():
+            print("\nNo threshold adjustments recommended at this time.")
+            print("Current thresholds appear appropriate for observed data.")
+            return 0
+        
+        print("\nThreshold Calibration Recommendations")
+        print("=" * 60)
+        print("Status: SUGGESTED (requires manual approval)\n")
+        
+        for item in rec.to_dict()["recommendations"]:
+            print(f"{item['path']}:")
+            print(f"  Current:     {item['current']:.3f}")
+            print(f"  Recommended: {item['recommended']:.3f} ({item['change']:+.3f})")
+            print(f"  Reason: {item['justification']}")
+            print()
+        
+        print("To apply: python -m soc_copilot.cli calibrate apply --confirm")
+        return 0
+        
+    elif args.calibrate_command == "preview":
+        # Generate and preview
+        drift_monitor = DriftMonitor()
+        drift_monitor.initialize()
+        drift_report = drift_monitor.get_latest_report()
+        drift_monitor.close()
+        
+        feedback_store = FeedbackStore()
+        feedback_store.initialize()
+        feedback_stats = feedback_store.get_feedback_stats()
+        feedback_store.close()
+        
+        drift_dict = drift_report.to_dict() if drift_report else {}
+        feedback_dict = {
+            "total_count": feedback_stats.total_count,
+            "reject_count": feedback_stats.reject_count,
+        }
+        
+        rec = calibrator.generate_recommendations(drift_dict, feedback_dict)
+        preview = calibrator.preview_changes(rec)
+        
+        print("\n" + preview + "\n")
+        return 0
+        
+    elif args.calibrate_command == "apply":
+        if not args.confirm:
+            print("Error: --confirm flag required to apply calibration")
+            print("This ensures explicit human approval for threshold changes.")
+            return 1
+        
+        # Generate recommendations
+        drift_monitor = DriftMonitor()
+        drift_monitor.initialize()
+        drift_report = drift_monitor.get_latest_report()
+        drift_monitor.close()
+        
+        feedback_store = FeedbackStore()
+        feedback_store.initialize()
+        feedback_stats = feedback_store.get_feedback_stats()
+        feedback_store.close()
+        
+        drift_dict = drift_report.to_dict() if drift_report else {}
+        feedback_dict = {
+            "total_count": feedback_stats.total_count,
+            "reject_count": feedback_stats.reject_count,
+        }
+        
+        rec = calibrator.generate_recommendations(drift_dict, feedback_dict)
+        
+        if not rec.has_recommendations():
+            print("No threshold changes to apply.")
+            return 0
+        
+        # Apply with confirmation
+        try:
+            calibrator.apply_recommendations(rec, confirmed=True)
+            print("\nThreshold calibration applied successfully.")
+            print(f"Backup created in: config/backups/")
+            print(f"Changes: {len(rec.recommendations)} threshold(s) updated")
+            return 0
+        except Exception as e:
+            print(f"Error applying calibration: {e}")
+            return 1
+        
+    elif args.calibrate_command == "rollback":
+        backups = calibrator.list_backups()
+        
+        if not backups:
+            print("No backups available.")
+            return 0
+        
+        if args.index >= len(backups):
+            print(f"Error: Backup index {args.index} not found.")
+            print(f"Available backups: 0-{len(backups)-1}")
+            return 1
+        
+        backup = backups[args.index]
+        print(f"\nRestoring backup: {backup.name}")
+        
+        try:
+            calibrator.restore_backup(backup)
+            print("Config restored successfully.")
+            print("Previous config backed up before restore.")
+            return 0
+        except Exception as e:
+            print(f"Error restoring backup: {e}")
+            return 1
+    else:
+        print("Use 'recommend', 'preview', 'apply', or 'rollback' subcommand")
+        return 1
 
 
 def cmd_drift(args) -> int:
@@ -501,6 +659,8 @@ def main() -> int:
         return cmd_feedback(args)
     elif args.command == "drift":
         return cmd_drift(args)
+    elif args.command == "calibrate":
+        return cmd_calibrate(args)
     
     return 0
 

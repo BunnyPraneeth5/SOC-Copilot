@@ -17,6 +17,15 @@ from soc_copilot.phase2.drift import (
     DriftReport,
     DriftLevel,
 )
+from soc_copilot.phase2.calibration import (
+    ThresholdCalibrator,
+    CalibrationRecommendation,
+)
+from soc_copilot.phase2.explainability import (
+    AlertExplainer,
+    ExplainedAlert,
+    AlertExplanation,
+)
 
 __all__ = [
     "FeedbackStore",
@@ -24,4 +33,9 @@ __all__ = [
     "DriftMonitor",
     "DriftReport",
     "DriftLevel",
+    "ThresholdCalibrator",
+    "CalibrationRecommendation",
+    "AlertExplainer",
+    "ExplainedAlert",
+    "AlertExplanation",
 ]
