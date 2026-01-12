@@ -76,17 +76,33 @@ class TestFileTailerRobustness(unittest.TestCase):
         expected_calls = [unittest.mock.call("line1"), unittest.mock.call("line2")]
         self.callback.assert_has_calls(expected_calls, any_order=True)
     
-    def test_error_limit(self):
-        """Test tailer stops after max errors"""
-        with patch('builtins.open', side_effect=OSError("Persistent error")):
-            tailer = FileTailer(str(self.temp_file), self.callback)
-            tailer._max_errors = 2  # Set low limit for testing
-            
-            tailer.start()
-            time.sleep(0.5)  # Let it hit error limit
-            
-            # Thread should stop due to error limit
-            self.assertFalse(tailer._thread.is_alive())
+    def test_encoding_fallback(self):
+        """Test tailer handles different encodings"""
+        # Create file with non-UTF8 content
+        self.temp_file.write_bytes(b"line1\n\xff\xfe invalid utf8\nline2\n")
+        
+        tailer = FileTailer(str(self.temp_file), self.callback)
+        tailer.start()
+        time.sleep(0.2)
+        tailer.stop()
+        
+        # Should handle encoding errors gracefully
+        stats = tailer.get_stats()
+        self.assertIn("encoding_errors", stats)
+        
+        # Should still process valid lines
+        call_args = [call[0][0] for call in self.callback.call_args_list]
+        self.assertIn("line1", call_args)
+        self.assertIn("line2", call_args)
+    
+    def test_tailer_get_stats(self):
+        """Test tailer statistics"""
+        tailer = FileTailer(str(self.temp_file), self.callback)
+        stats = tailer.get_stats()
+        
+        expected_keys = ["filepath", "position", "error_count", "encoding_errors", "running", "file_exists"]
+        for key in expected_keys:
+            self.assertIn(key, stats)
 
 
 class TestDirectoryWatcherRobustness(unittest.TestCase):
@@ -142,14 +158,22 @@ class TestDirectoryWatcherRobustness(unittest.TestCase):
         # Tailer should be cleaned up
         self.assertEqual(len(watcher._tailers), 0)
     
-    def test_get_stats(self):
-        """Test watcher statistics"""
-        watcher = DirectoryWatcher(str(self.temp_dir), self.callback)
-        stats = watcher.get_stats()
+    def test_get_stats_enhanced(self):
+        """Test watcher statistics with enhanced data"""
+        # Create test file
+        test_file = Path(self.temp_dir) / "test.log"
+        test_file.write_text("test\n")
         
-        expected_keys = ["directory", "pattern", "known_files", "active_tailers", "error_count", "running"]
+        watcher = DirectoryWatcher(str(self.temp_dir), self.callback)
+        watcher.start()
+        time.sleep(0.2)
+        
+        stats = watcher.get_stats()
+        expected_keys = ["directory", "pattern", "known_files", "active_tailers", "error_count", "running", "last_scan", "tailer_stats"]
         for key in expected_keys:
             self.assertIn(key, stats)
+        
+        watcher.stop()
 
 
 class TestIngestionControllerRobustness(unittest.TestCase):

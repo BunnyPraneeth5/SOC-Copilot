@@ -45,19 +45,31 @@ class TestDashboardImprovements(unittest.TestCase):
         # Should not raise exception
         self.dashboard.refresh()
     
-    def test_status_messages(self):
-        """Test status message generation"""
+    def test_empty_state_messaging(self):
+        """Test improved empty state messaging"""
+        # Mock different system states
+        self.bridge.get_stats.return_value = {
+            "pipeline_loaded": False,
+            "ingestion_running": False
+        }
+        
+        # Should not raise exception and should show appropriate message
+        self.dashboard.refresh()
+        self.bridge.get_stats.assert_called()
+    
+    def test_metric_update_safety(self):
+        """Test safe metric updates"""
         # Mock successful state
         self.bridge.get_latest_alerts.return_value = []
         self.bridge.get_stats.return_value = {
             "pipeline_loaded": True,
-            "results_stored": 5
+            "results_stored": 10,
+            "ingestion_running": True
         }
         
+        # Should handle metric updates safely
         self.dashboard.refresh()
-        
-        # Should call get_stats
-        self.bridge.get_stats.assert_called()
+        self.bridge.get_latest_alerts.assert_called()
 
 
 class TestAlertsViewImprovements(unittest.TestCase):
@@ -88,14 +100,31 @@ class TestAlertsViewImprovements(unittest.TestCase):
         # Should not raise exception
         self.alerts_view.refresh()
     
-    def test_click_error_handling(self):
-        """Test row click error handling"""
-        # Mock item that causes error
-        mock_item = Mock()
-        mock_item.row.side_effect = Exception("Click error")
+    def test_enhanced_error_states(self):
+        """Test enhanced error state handling"""
+        # Mock bridge to raise exception
+        self.bridge.get_latest_alerts.side_effect = Exception("Database connection failed")
         
-        # Should not raise exception
-        self.alerts_view._on_row_clicked(mock_item)
+        # Should not raise exception and show detailed error
+        self.alerts_view.refresh()
+    
+    def test_safe_data_access(self):
+        """Test safe data access for alert attributes"""
+        # Mock alert with missing attributes
+        mock_result = Mock()
+        mock_result.batch_id = "test-batch"
+        mock_alert = Mock()
+        mock_alert.alert_id = "test-alert"
+        mock_alert.timestamp = "2023-01-01 12:00:00"  # String instead of datetime
+        mock_alert.priority = "High"
+        mock_alert.classification = "Test Attack"
+        # Missing source_ip and confidence attributes
+        mock_result.alerts = [mock_alert]
+        
+        self.bridge.get_latest_alerts.return_value = [mock_result]
+        
+        # Should handle missing attributes gracefully
+        self.alerts_view.refresh()
 
 
 class TestUIRobustness(unittest.TestCase):

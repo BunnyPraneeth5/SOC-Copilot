@@ -48,35 +48,54 @@ def check_system_requirements():
 
 
 def check_dependencies():
-    """Check if all dependencies can be imported"""
+    """Check if all dependencies can be imported with detailed feedback"""
     print("\nDependency Check")
     print("=" * 40)
     
     required_packages = [
-        ("scikit-learn", "sklearn"),
-        ("numpy", "numpy"),
-        ("pandas", "pandas"),
-        ("PyQt6", "PyQt6.QtWidgets"),
-        ("pydantic", "pydantic"),
-        ("pyyaml", "yaml"),
-        ("structlog", "structlog"),
-        ("joblib", "joblib")
+        ("scikit-learn", "sklearn", "Machine learning library"),
+        ("numpy", "numpy", "Numerical computing"),
+        ("pandas", "pandas", "Data processing"),
+        ("PyQt6", "PyQt6.QtWidgets", "GUI framework"),
+        ("pydantic", "pydantic", "Data validation"),
+        ("pyyaml", "yaml", "YAML configuration"),
+        ("structlog", "structlog", "Structured logging"),
+        ("joblib", "joblib", "Model serialization"),
+        ("python-dateutil", "dateutil", "Date parsing"),
+        ("python-evtx", "Evtx", "Windows event log parsing")
     ]
     
     missing_packages = []
+    optional_missing = []
     
-    for package_name, import_name in required_packages:
+    for package_name, import_name, description in required_packages:
         try:
             __import__(import_name)
-            print(f"[OK] {package_name}")
+            print(f"[OK] {package_name} - {description}")
         except ImportError:
-            print(f"[ERROR] {package_name} - Missing")
-            missing_packages.append(package_name)
+            if package_name in ["python-evtx"]:
+                print(f"[OPTIONAL] {package_name} - {description} (Windows only)")
+                optional_missing.append(package_name)
+            else:
+                print(f"[ERROR] {package_name} - {description} - Missing")
+                missing_packages.append(package_name)
+    
+    # Check optional system packages
+    try:
+        import psutil
+        print("[OK] psutil - System monitoring (optional)")
+    except ImportError:
+        print("[OPTIONAL] psutil - System monitoring (recommended)")
+        optional_missing.append("psutil")
     
     if missing_packages:
-        print(f"\nMissing packages: {', '.join(missing_packages)}")
+        print(f"\nCritical missing packages: {', '.join(missing_packages)}")
         print("Run: pip install -e .")
         return False
+    
+    if optional_missing:
+        print(f"\nOptional packages missing: {', '.join(optional_missing)}")
+        print("These are not required but may improve functionality.")
     
     return True
 
@@ -109,41 +128,75 @@ def check_file_structure():
 
 
 def check_models():
-    """Check if trained models are available"""
+    """Check if trained models are available with detailed status"""
     print("\nModel Check")
     print("=" * 40)
     
     models_dir = Path("data/models")
     if not models_dir.exists():
         print("[ERROR] Models directory missing")
+        print(f"Expected: {models_dir.absolute()}")
+        print("Run: mkdir -p data/models")
         return False
     
     required_models = [
-        "isolation_forest_v1.joblib",
-        "random_forest_v1.joblib",
-        "feature_order.json",
-        "label_map.json"
+        ("isolation_forest_v1.joblib", "Isolation Forest anomaly detection model"),
+        ("random_forest_v1.joblib", "Random Forest classification model"),
+        ("feature_order.json", "Feature ordering configuration"),
+        ("label_map.json", "Attack type label mapping")
     ]
     
     missing_models = []
     
-    for model_file in required_models:
+    for model_file, description in required_models:
         model_path = models_dir / model_file
         if model_path.exists():
-            print(f"[OK] {model_file}")
+            # Check file size
+            size_mb = model_path.stat().st_size / (1024 * 1024)
+            print(f"[OK] {model_file} - {description} ({size_mb:.1f}MB)")
         else:
-            print(f"[ERROR] {model_file} - Missing")
+            print(f"[ERROR] {model_file} - {description} - Missing")
             missing_models.append(model_file)
     
     if missing_models:
-        print("\nTo train models, run: python scripts/train_models.py")
+        print("\nTo train models:")
+        print("1. python scripts/train_models.py")
+        print("2. Wait for training to complete (may take several minutes)")
+        print("3. Re-run this check")
         return False
     
+    print("\n[SUCCESS] All models are available and ready!")
     return True
 
 
+def check_configuration():
+    """Check configuration files and settings"""
+    print("\nConfiguration Check")
+    print("=" * 40)
+    
+    config_files = [
+        ("config/thresholds.yaml", "Alert thresholds"),
+        ("config/features.yaml", "Feature definitions"),
+        ("config/model_config.yaml", "Model parameters"),
+        ("config/ingestion/system_logs.yaml", "Log ingestion settings"),
+        ("config/governance/policy.yaml", "Governance policies")
+    ]
+    
+    missing_configs = []
+    
+    for config_path, description in config_files:
+        path = Path(config_path)
+        if path.exists():
+            print(f"[OK] {description}: {config_path}")
+        else:
+            print(f"[ERROR] {description}: {config_path} - Missing")
+            missing_configs.append(config_path)
+    
+    return len(missing_configs) == 0
+
+
 def check_permissions():
-    """Check file permissions"""
+    """Check file permissions and write access"""
     print("\nPermissions Check")
     print("=" * 40)
     
@@ -153,19 +206,29 @@ def check_permissions():
         (".", "Current directory write access")
     ]
     
+    permission_issues = []
+    
     for path_str, description in test_paths:
         path = Path(path_str)
-        if path.exists() and os.access(path, os.W_OK):
+        try:
+            if not path.exists():
+                path.mkdir(parents=True, exist_ok=True)
+            
+            # Test write access
+            test_file = path / ".write_test"
+            test_file.write_text("test")
+            test_file.unlink()
+            
             print(f"[OK] {description}")
-        else:
-            print(f"[ERROR] {description} - No write permission")
-            return False
+        except (OSError, PermissionError) as e:
+            print(f"[ERROR] {description} - {e}")
+            permission_issues.append(path_str)
     
-    return True
+    return len(permission_issues) == 0
 
 
 def main():
-    """Main check function"""
+    """Main check function with comprehensive validation"""
     print("SOC Copilot Production Readiness Check")
     print("=" * 50)
     
@@ -173,6 +236,7 @@ def main():
         ("System Requirements", check_system_requirements),
         ("Dependencies", check_dependencies),
         ("File Structure", check_file_structure),
+        ("Configuration", check_configuration),
         ("Permissions", check_permissions),
         ("Models", check_models)
     ]
@@ -191,21 +255,38 @@ def main():
     print("SUMMARY")
     print("=" * 50)
     
-    all_passed = True
+    critical_checks = ["System Requirements", "Dependencies", "File Structure", "Permissions"]
+    optional_checks = ["Configuration", "Models"]
+    
+    critical_passed = all(results.get(check, False) for check in critical_checks)
+    optional_passed = all(results.get(check, False) for check in optional_checks)
+    
     for check_name, passed in results.items():
         status = "[PASS]" if passed else "[FAIL]"
-        print(f"{check_name}: {status}")
-        if not passed:
-            all_passed = False
+        check_type = "[CRITICAL]" if check_name in critical_checks else "[OPTIONAL]"
+        print(f"{check_name}: {status} {check_type}")
     
-    if all_passed:
-        print("\nAll checks passed! SOC Copilot is ready to run.")
-        print("Launch with: python launch_ui.py")
+    print("\n" + "=" * 50)
+    
+    if critical_passed and optional_passed:
+        print("ALL CHECKS PASSED! SOC Copilot is ready for production use.")
+        print("\nLaunch with: python launch_ui.py")
+        return 0
+    elif critical_passed:
+        print("CRITICAL CHECKS PASSED. SOC Copilot can run with limited functionality.")
+        print("\nTo enable full functionality:")
+        if not results.get("Models", False):
+            print("- Train models: python scripts/train_models.py")
+        if not results.get("Configuration", False):
+            print("- Check configuration files in config/ directory")
+        print("\nLaunch with: python launch_ui.py")
+        return 0
     else:
-        print("\nSome checks failed. Please address the issues above.")
-        print("For help, see README.md or run: python setup.py")
-    
-    return 0 if all_passed else 1
+        print("CRITICAL CHECKS FAILED. Please address the issues above.")
+        print("\nFor help:")
+        print("- Run setup: python setup.py")
+        print("- See README.md for troubleshooting")
+        return 1
 
 
 if __name__ == "__main__":

@@ -13,10 +13,10 @@ class Dashboard(QWidget):
         self.bridge = bridge
         self._init_ui()
         
-        # Auto-refresh every 3 seconds
+        # Auto-refresh every 5 seconds (less aggressive)
         self.timer = QTimer()
         self.timer.timeout.connect(self.refresh)
-        self.timer.start(3000)
+        self.timer.start(5000)
         
         # Initial refresh
         self.refresh()
@@ -82,6 +82,9 @@ class Dashboard(QWidget):
     def refresh(self):
         """Refresh dashboard metrics with error handling"""
         try:
+            # Show loading state
+            self.status_label.setText("Status: Loading...")
+            
             results = self.bridge.get_latest_alerts(limit=100)
             
             # Count alerts by priority
@@ -93,37 +96,69 @@ class Dashboard(QWidget):
             for result in results:
                 for alert in result.alerts:
                     total += 1
-                    if "Critical" in alert.priority:
+                    priority_lower = alert.priority.lower()
+                    if "critical" in priority_lower:
                         critical += 1
-                    elif "High" in alert.priority:
+                    elif "high" in priority_lower:
                         high += 1
-                    elif "Medium" in alert.priority:
+                    elif "medium" in priority_lower:
                         medium += 1
             
-            # Update labels
-            self.total_label.findChild(QLabel, "value").setText(str(total))
-            self.critical_label.findChild(QLabel, "value").setText(str(critical))
-            self.high_label.findChild(QLabel, "value").setText(str(high))
-            self.medium_label.findChild(QLabel, "value").setText(str(medium))
+            # Update labels safely
+            self._update_metric_safe(self.total_label, str(total))
+            self._update_metric_safe(self.critical_label, str(critical))
+            self._update_metric_safe(self.high_label, str(high))
+            self._update_metric_safe(self.medium_label, str(medium))
             
             # Update status
             stats = self.bridge.get_stats()
             pipeline_status = "Active" if stats.get("pipeline_loaded") else "Inactive"
             results_count = stats.get('results_stored', 0)
+            ingestion_running = stats.get('ingestion_running', False)
             
-            self.status_label.setText(f"Status: {pipeline_status} | Results: {results_count}")
+            status_parts = [f"Pipeline: {pipeline_status}"]
+            if ingestion_running:
+                status_parts.append("Ingestion: Active")
+            status_parts.append(f"Results: {results_count}")
             
-            # Handle empty state
-            if total == 0 and results_count == 0:
-                if pipeline_status == "Active":
-                    self.empty_state_label.setText("No alerts detected. System is monitoring for threats...")
-                else:
-                    self.empty_state_label.setText("Pipeline inactive. Check configuration and restart.")
-            elif total == 0:
-                self.empty_state_label.setText("No recent alerts. System is operating normally.")
-            else:
-                self.empty_state_label.setText("")
+            self.status_label.setText(" | ".join(status_parts))
+            
+            # Handle empty state with better messaging
+            self._update_empty_state(total, results_count, pipeline_status, ingestion_running)
             
         except Exception as e:
-            self.status_label.setText(f"Status: Error - {str(e)[:50]}")
-            self.empty_state_label.setText("Unable to load dashboard data. Check system status.")
+            error_msg = str(e)[:50] + "..." if len(str(e)) > 50 else str(e)
+            self.status_label.setText(f"Status: Error - {error_msg}")
+            self.empty_state_label.setText("Unable to load dashboard data. Check system status and logs.")
+    
+    def _update_metric_safe(self, frame: QFrame, value: str):
+        """Safely update metric value"""
+        try:
+            value_label = frame.findChild(QLabel, "value")
+            if value_label:
+                value_label.setText(value)
+        except Exception:
+            pass  # Ignore update errors
+    
+    def _update_empty_state(self, total: int, results_count: int, pipeline_status: str, ingestion_running: bool):
+        """Update empty state message based on system state"""
+        if total == 0:
+            if pipeline_status != "Active":
+                self.empty_state_label.setText(
+                    "⚠️ Pipeline inactive. Run 'python scripts/train_models.py' if models are missing, "
+                    "then restart the application."
+                )
+            elif not ingestion_running:
+                self.empty_state_label.setText(
+                    "📁 No log sources configured. Use the interface to add log files or directories to monitor."
+                )
+            elif results_count == 0:
+                self.empty_state_label.setText(
+                    "🔍 System is monitoring for threats. No alerts detected yet - this is good!"
+                )
+            else:
+                self.empty_state_label.setText(
+                    "✅ No recent alerts. System is operating normally and monitoring for threats."
+                )
+        else:
+            self.empty_state_label.setText("")

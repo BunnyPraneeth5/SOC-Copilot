@@ -15,10 +15,10 @@ class AlertsView(QWidget):
         self.bridge = bridge
         self._init_ui()
         
-        # Auto-refresh every 3 seconds
+        # Auto-refresh every 5 seconds (less aggressive)
         self.timer = QTimer()
         self.timer.timeout.connect(self.refresh)
-        self.timer.start(3000)
+        self.timer.start(5000)
         
         # Initial refresh
         self.refresh()
@@ -65,56 +65,106 @@ class AlertsView(QWidget):
                     alerts_data.append({
                         "batch_id": result.batch_id,
                         "alert_id": alert.alert_id,
-                        "time": alert.timestamp.strftime("%H:%M:%S"),
+                        "time": alert.timestamp.strftime("%H:%M:%S") if hasattr(alert.timestamp, 'strftime') else str(alert.timestamp),
                         "priority": alert.priority,
                         "classification": alert.classification,
-                        "source_ip": alert.source_ip or "N/A",
-                        "confidence": f"{alert.confidence:.2f}"
+                        "source_ip": getattr(alert, 'source_ip', None) or "N/A",
+                        "confidence": f"{alert.confidence:.2f}" if hasattr(alert, 'confidence') else "N/A"
                     })
             
-            # Handle empty state
+            # Handle empty state with better messaging
             if not alerts_data:
                 self.table.setRowCount(0)
-                self.empty_label.setText("No alerts to display.\nSystem is monitoring for security threats...")
-                self.empty_label.show()
-                self.table.hide()
+                self._show_empty_state()
                 return
             else:
                 self.empty_label.hide()
                 self.table.show()
             
-            # Update table
-            self.table.setRowCount(len(alerts_data))
-            
-            for row, alert in enumerate(alerts_data):
-                self.table.setItem(row, 0, QTableWidgetItem(alert["time"]))
-                self.table.setItem(row, 1, QTableWidgetItem(alert["priority"]))
-                self.table.setItem(row, 2, QTableWidgetItem(alert["classification"]))
-                self.table.setItem(row, 3, QTableWidgetItem(alert["source_ip"]))
-                self.table.setItem(row, 4, QTableWidgetItem(alert["confidence"]))
-                self.table.setItem(row, 5, QTableWidgetItem(alert["batch_id"]))
-                
-                # Color by priority
-                if "Critical" in alert["priority"]:
-                    color = Qt.GlobalColor.red
-                elif "High" in alert["priority"]:
-                    color = Qt.GlobalColor.darkYellow
-                else:
-                    color = Qt.GlobalColor.white
-                
-                for col in range(6):
-                    item = self.table.item(row, col)
-                    if item:
-                        item.setForeground(color)
-            
-            # Auto-resize columns
-            self.table.resizeColumnsToContents()
+            # Update table efficiently
+            self._update_table(alerts_data)
         
         except Exception as e:
-            self.table.setRowCount(0)
-            self.empty_label.setText(f"Error loading alerts: {str(e)[:100]}")
-            self.empty_label.show()
-            self.table.hide()
+            self._show_error_state(str(e))
+    
+    def _show_empty_state(self):
+        """Show appropriate empty state message"""
+        try:
+            stats = self.bridge.get_stats()
+            pipeline_active = stats.get("pipeline_loaded", False)
+            ingestion_running = stats.get("ingestion_running", False)
+            
+            if not pipeline_active:
+                message = (
+                    "⚠️ Pipeline not active\n\n"
+                    "Models may be missing. Run:\n"
+                    "python scripts/train_models.py"
+                )
+            elif not ingestion_running:
+                message = (
+                    "📁 No log sources configured\n\n"
+                    "Add log files or directories to start monitoring"
+                )
+            else:
+                message = (
+                    "✅ No alerts detected\n\n"
+                    "System is monitoring for security threats.\n"
+                    "This is good - no threats detected!"
+                )
+            
+            self.empty_label.setText(message)
+        except Exception:
+            self.empty_label.setText("No alerts to display.")
+        
+        self.empty_label.show()
+        self.table.hide()
+    
+    def _show_error_state(self, error: str):
+        """Show error state"""
+        self.table.setRowCount(0)
+        error_msg = error[:100] + "..." if len(error) > 100 else error
+        self.empty_label.setText(f"❌ Error loading alerts:\n{error_msg}\n\nCheck logs for details.")
+        self.empty_label.show()
+        self.table.hide()
+    
+    def _update_table(self, alerts_data: list):
+        """Update table with alerts data"""
+        self.table.setRowCount(len(alerts_data))
+        
+        for row, alert in enumerate(alerts_data):
+            # Create items safely
+            items = [
+                QTableWidgetItem(alert["time"]),
+                QTableWidgetItem(alert["priority"]),
+                QTableWidgetItem(alert["classification"]),
+                QTableWidgetItem(alert["source_ip"]),
+                QTableWidgetItem(alert["confidence"]),
+                QTableWidgetItem(alert["batch_id"])
+            ]
+            
+            # Set items
+            for col, item in enumerate(items):
+                self.table.setItem(row, col, item)
+            
+            # Color by priority (case insensitive)
+            priority_lower = alert["priority"].lower()
+            if "critical" in priority_lower:
+                color = Qt.GlobalColor.red
+            elif "high" in priority_lower:
+                color = Qt.GlobalColor.darkYellow
+            elif "medium" in priority_lower:
+                color = Qt.GlobalColor.yellow
+            else:
+                color = Qt.GlobalColor.white
+            
+            # Apply color to all columns in row
+            for col in range(6):
+                item = self.table.item(row, col)
+                if item:
+                    item.setForeground(color)
+        
+        # Auto-resize columns to content
+        self.table.resizeColumnsToContents()
     
     def _on_row_clicked(self, item):
         """Handle row click with error handling"""
