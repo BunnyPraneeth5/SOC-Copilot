@@ -20,6 +20,14 @@ def main():
             print("Please run from the SOC Copilot project directory.")
             sys.exit(1)
         
+        # Check kill switch
+        from soc_copilot.phase4.kill_switch import KillSwitch
+        kill_switch = KillSwitch(project_root)
+        if kill_switch.is_active():
+            print("Kill switch is active. Application disabled.")
+            print(f"Remove {kill_switch.kill_file} to re-enable.")
+            sys.exit(1)
+        
         # Import PyQt6 with helpful error message
         try:
             from PyQt6.QtWidgets import QApplication, QMessageBox
@@ -76,7 +84,7 @@ def main():
                 print("All required models found.")
         
         # Initialize controller with error handling
-        controller = AppController(str(models_dir))
+        controller = AppController(str(models_dir), killswitch_check=kill_switch.is_active)
         
         try:
             controller.initialize()
