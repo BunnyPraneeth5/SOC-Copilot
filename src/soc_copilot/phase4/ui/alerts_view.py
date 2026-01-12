@@ -1,11 +1,12 @@
 """Live alerts table view"""
 
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QTableWidget, QTableWidgetItem, QHeaderView
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QTableWidget, QTableWidgetItem, QHeaderView, QLabel
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QFont
 
 
 class AlertsView(QWidget):
-    """Live alerts table with auto-refresh"""
+    """Live alerts table with auto-refresh and empty state"""
     
     alert_selected = pyqtSignal(str, str)  # batch_id, alert_id
     
@@ -18,6 +19,9 @@ class AlertsView(QWidget):
         self.timer = QTimer()
         self.timer.timeout.connect(self.refresh)
         self.timer.start(3000)
+        
+        # Initial refresh
+        self.refresh()
     
     def _init_ui(self):
         layout = QVBoxLayout()
@@ -35,11 +39,22 @@ class AlertsView(QWidget):
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.itemClicked.connect(self._on_row_clicked)
         
+        # Set alternating row colors
+        self.table.setAlternatingRowColors(True)
+        
         layout.addWidget(self.table)
+        
+        # Empty state label
+        self.empty_label = QLabel("")
+        self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_label.setStyleSheet("color: #888888; font-style: italic; padding: 20px;")
+        self.empty_label.setFont(QFont("Arial", 12))
+        layout.addWidget(self.empty_label)
+        
         self.setLayout(layout)
     
     def refresh(self):
-        """Refresh alerts table"""
+        """Refresh alerts table with error handling and empty state"""
         try:
             results = self.bridge.get_latest_alerts(limit=50)
             
@@ -56,6 +71,17 @@ class AlertsView(QWidget):
                         "source_ip": alert.source_ip or "N/A",
                         "confidence": f"{alert.confidence:.2f}"
                     })
+            
+            # Handle empty state
+            if not alerts_data:
+                self.table.setRowCount(0)
+                self.empty_label.setText("No alerts to display.\nSystem is monitoring for security threats...")
+                self.empty_label.show()
+                self.table.hide()
+                return
+            else:
+                self.empty_label.hide()
+                self.table.show()
             
             # Update table
             self.table.setRowCount(len(alerts_data))
@@ -80,13 +106,22 @@ class AlertsView(QWidget):
                     item = self.table.item(row, col)
                     if item:
                         item.setForeground(color)
+            
+            # Auto-resize columns
+            self.table.resizeColumnsToContents()
         
-        except Exception:
-            pass
+        except Exception as e:
+            self.table.setRowCount(0)
+            self.empty_label.setText(f"Error loading alerts: {str(e)[:100]}")
+            self.empty_label.show()
+            self.table.hide()
     
     def _on_row_clicked(self, item):
-        """Handle row click"""
-        row = item.row()
-        batch_id = self.table.item(row, 5).text()
-        alert_id = self.table.item(row, 2).text()  # Use classification as identifier
-        self.alert_selected.emit(batch_id, alert_id)
+        """Handle row click with error handling"""
+        try:
+            row = item.row()
+            batch_id = self.table.item(row, 5).text()
+            alert_id = self.table.item(row, 2).text()  # Use classification as identifier
+            self.alert_selected.emit(batch_id, alert_id)
+        except Exception:
+            pass  # Ignore click errors

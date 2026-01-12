@@ -1,0 +1,28 @@
+# System Log Ingestion Configuration
+# Sprint-17: Real-Time System Log Ingestion
+
+# CRITICAL: SOC Copilot does NOT read OS logs directly
+# External exporters write to these files; SOC Copilot reads files
+
+# Enable/disable system log ingestion
+enabled: false
+
+# Export interval (seconds) - for external exporter reference
+export_interval: 5
+
+# Log types to ingest
+log_types:
+  - windows_security
+  - windows_system
+
+# File paths where external exporters write logs
+file_paths:
+  windows_security: "logs/system/windows_security.log"
+  windows_system: "logs/system/windows_system.log"
+
+# Micro-batch configuration
+max_batch_size: 100
+batch_interval: 5.0
+
+# Governance
+enforce_killswitch: true

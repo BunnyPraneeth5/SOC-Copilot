@@ -6,7 +6,7 @@ from PyQt6.QtGui import QFont
 
 
 class Dashboard(QWidget):
-    """Metrics overview dashboard"""
+    """Metrics overview dashboard with empty state handling"""
     
     def __init__(self, bridge):
         super().__init__()
@@ -17,6 +17,9 @@ class Dashboard(QWidget):
         self.timer = QTimer()
         self.timer.timeout.connect(self.refresh)
         self.timer.start(3000)
+        
+        # Initial refresh
+        self.refresh()
     
     def _init_ui(self):
         layout = QVBoxLayout()
@@ -41,9 +44,14 @@ class Dashboard(QWidget):
         
         layout.addLayout(metrics_layout)
         
-        # Status
-        self.status_label = QLabel("Status: Ready")
+        # Status and empty state
+        self.status_label = QLabel("Status: Initializing...")
         layout.addWidget(self.status_label)
+        
+        self.empty_state_label = QLabel("")
+        self.empty_state_label.setStyleSheet("color: #888888; font-style: italic;")
+        self.empty_state_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.empty_state_label)
         
         layout.addStretch()
         self.setLayout(layout)
@@ -72,7 +80,7 @@ class Dashboard(QWidget):
         return frame
     
     def refresh(self):
-        """Refresh dashboard metrics"""
+        """Refresh dashboard metrics with error handling"""
         try:
             results = self.bridge.get_latest_alerts(limit=100)
             
@@ -98,9 +106,24 @@ class Dashboard(QWidget):
             self.high_label.findChild(QLabel, "value").setText(str(high))
             self.medium_label.findChild(QLabel, "value").setText(str(medium))
             
+            # Update status
             stats = self.bridge.get_stats()
-            status = "Active" if stats.get("pipeline_loaded") else "Inactive"
-            self.status_label.setText(f"Status: {status} | Results: {stats.get('results_stored', 0)}")
+            pipeline_status = "Active" if stats.get("pipeline_loaded") else "Inactive"
+            results_count = stats.get('results_stored', 0)
             
-        except Exception:
-            pass
+            self.status_label.setText(f"Status: {pipeline_status} | Results: {results_count}")
+            
+            # Handle empty state
+            if total == 0 and results_count == 0:
+                if pipeline_status == "Active":
+                    self.empty_state_label.setText("No alerts detected. System is monitoring for threats...")
+                else:
+                    self.empty_state_label.setText("Pipeline inactive. Check configuration and restart.")
+            elif total == 0:
+                self.empty_state_label.setText("No recent alerts. System is operating normally.")
+            else:
+                self.empty_state_label.setText("")
+            
+        except Exception as e:
+            self.status_label.setText(f"Status: Error - {str(e)[:50]}")
+            self.empty_state_label.setText("Unable to load dashboard data. Check system status.")

@@ -30,6 +30,7 @@ from soc_copilot.phase2.calibration.recommender import ThresholdCalibrator
 from soc_copilot.phase3.governance import (
     GovernancePolicy, ApprovalWorkflow, KillSwitch, AuditLogger
 )
+from soc_copilot.phase4.ingestion import SystemLogConfig
 
 logger = get_logger(__name__)
 
@@ -225,6 +226,24 @@ Examples:
     governance_enable = governance_subparsers.add_parser("enable", help="Disable kill switch (enable Phase-3)")
     governance_enable.add_argument("--actor", required=True, help="Actor name")
     governance_enable.add_argument("--reason", required=True, help="Reason")
+    
+    # System logs command (Sprint-17)
+    system_logs_parser = subparsers.add_parser(
+        "system-logs",
+        help="System log ingestion control (manual operations only)",
+    )
+    system_logs_subparsers = system_logs_parser.add_subparsers(dest="system_logs_command")
+    
+    # System logs status
+    system_logs_status = system_logs_subparsers.add_parser("status", help="Show system log ingestion status")
+    
+    # System logs enable
+    system_logs_enable = system_logs_subparsers.add_parser("enable", help="Enable system log ingestion")
+    system_logs_enable.add_argument("--actor", required=True, help="Actor name")
+    
+    # System logs disable
+    system_logs_disable = system_logs_subparsers.add_parser("disable", help="Disable system log ingestion")
+    system_logs_disable.add_argument("--actor", required=True, help="Actor name")
     
     return parser
 
@@ -873,6 +892,96 @@ def cmd_governance(args) -> int:
         return 1
 
 
+def cmd_system_logs(args) -> int:
+    """Run system-logs command (Sprint-17)."""
+    config = SystemLogConfig()
+    db_path = "data/governance/governance.db"
+    
+    if args.system_logs_command == "status":
+        # Show system log ingestion status
+        print("\nSystem Log Ingestion Status")
+        print("=" * 60)
+        
+        config_dict = config.to_dict()
+        print(f"\nEnabled: {config_dict['enabled']}")
+        print(f"Export Interval: {config_dict['export_interval']}s (for external exporter)")
+        print(f"Batch Interval: {config_dict['batch_interval']}s")
+        print(f"Killswitch Enforcement: {config_dict['enforce_killswitch']}")
+        
+        print(f"\nLog Types:")
+        for log_type in config_dict['log_types']:
+            print(f"  - {log_type}")
+        
+        print(f"\nFile Paths (written by external exporters):")
+        for log_type, filepath in config_dict['file_paths'].items():
+            file_exists = Path(filepath).exists()
+            status = "[OK]" if file_exists else "[--]"
+            print(f"  {status} {log_type}: {filepath}")
+        
+        print(f"\nNOTE: SOC Copilot does NOT read OS logs directly.")
+        print(f"      External exporters must write to the above file paths.")
+        print(f"      See docs/SPRINT17_SYSTEM_LOGS_MANUAL.md for setup.")
+        print()
+        return 0
+    
+    elif args.system_logs_command == "enable":
+        # Enable system log ingestion
+        audit = AuditLogger(db_path)
+        
+        # Update config
+        config_path = Path("config/ingestion/system_logs.yaml")
+        with open(config_path) as f:
+            config_data = yaml.safe_load(f)
+        
+        config_data['enabled'] = True
+        
+        with open(config_path, 'w') as f:
+            yaml.dump(config_data, f, default_flow_style=False)
+        
+        # Audit event
+        audit.log_event(
+            actor=args.actor,
+            action="system_logs_enabled",
+            reason="Manual enable via CLI"
+        )
+        
+        print(f"\nSystem log ingestion ENABLED")
+        print(f"  Actor: {args.actor}")
+        print(f"\nNOTE: This only enables SOC Copilot ingestion.")
+        print(f"      External exporters must be started separately.")
+        print(f"      See docs/SPRINT17_SYSTEM_LOGS_MANUAL.md for exporter setup.")
+        return 0
+    
+    elif args.system_logs_command == "disable":
+        # Disable system log ingestion
+        audit = AuditLogger(db_path)
+        
+        # Update config
+        config_path = Path("config/ingestion/system_logs.yaml")
+        with open(config_path) as f:
+            config_data = yaml.safe_load(f)
+        
+        config_data['enabled'] = False
+        
+        with open(config_path, 'w') as f:
+            yaml.dump(config_data, f, default_flow_style=False)
+        
+        # Audit event
+        audit.log_event(
+            actor=args.actor,
+            action="system_logs_disabled",
+            reason="Manual disable via CLI"
+        )
+        
+        print(f"\nSystem log ingestion DISABLED")
+        print(f"  Actor: {args.actor}")
+        return 0
+    
+    else:
+        print("Use 'status', 'enable', or 'disable' subcommand")
+        return 1
+
+
 def main() -> int:
     """Main entry point."""
     parser = setup_parser()
@@ -894,6 +1003,8 @@ def main() -> int:
         return cmd_calibrate(args)
     elif args.command == "governance":
         return cmd_governance(args)
+    elif args.command == "system-logs":
+        return cmd_system_logs(args)
     
     return 0
 
