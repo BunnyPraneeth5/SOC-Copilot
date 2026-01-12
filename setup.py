@@ -52,6 +52,51 @@ def install_dependencies():
         return False
 
 
+def check_permissions():
+    """Check write permissions for required directories"""
+    print("Checking permissions...")
+    
+    required_dirs = [
+        "data",
+        "data/models",
+        "logs"
+    ]
+    
+    permission_errors = []
+    
+    for dir_path in required_dirs:
+        path = Path(dir_path)
+        try:
+            # Create if doesn't exist
+            path.mkdir(parents=True, exist_ok=True)
+            
+            # Test write access
+            test_file = path / ".write_test"
+            test_file.write_text("test")
+            test_file.unlink()
+            
+            print(f"[OK] Write access: {dir_path}")
+        except (OSError, PermissionError) as e:
+            print(f"[ERROR] No write access: {dir_path} - {e}")
+            permission_errors.append((dir_path, str(e)))
+    
+    if permission_errors:
+        print("\n[ERROR] Permission check failed")
+        print("\nFailed directories:")
+        for dir_path, error in permission_errors:
+            print(f"  {dir_path}: {error}")
+        print("\nRemediation:")
+        if sys.platform == "win32":
+            print("  - Run as Administrator, or")
+            print("  - Change directory permissions in File Explorer")
+        else:
+            print("  - Run: chmod -R u+w data/ logs/")
+            print("  - Or run with appropriate user permissions")
+        return False
+    
+    return True
+
+
 def create_directories():
     """Create necessary directories"""
     dirs = [
@@ -172,6 +217,12 @@ def main():
     
     # Check Python version
     if not check_python_version():
+        sys.exit(1)
+    
+    # Check permissions
+    if not check_permissions():
+        print("\n[ERROR] Setup failed due to permission issues")
+        print("Fix permissions and try again.")
         sys.exit(1)
     
     # Check system compatibility

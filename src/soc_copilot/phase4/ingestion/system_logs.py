@@ -13,6 +13,7 @@ from typing import Optional, Callable
 import yaml
 
 from soc_copilot.phase4.ingestion import IngestionController
+from soc_copilot.phase4.ingestion.system_log_reader import SystemLogReader, PermissionCheckResult
 
 
 class SystemLogConfig:
@@ -80,11 +81,16 @@ class SystemLogIntegration:
         self.config = SystemLogConfig(config_path)
         self.killswitch_check = killswitch_check
         self._controller: Optional[IngestionController] = None
+        self._log_reader = SystemLogReader()
+        self._permission_check: Optional[PermissionCheckResult] = None
     
     def initialize(self, batch_callback: Callable):
         """Initialize ingestion controller"""
         if not self.config.enabled:
             return
+        
+        # Check system log permissions explicitly
+        self._permission_check = self._log_reader.validate_system_log_access()
         
         # Create controller with killswitch enforcement
         self._controller = IngestionController(
@@ -132,8 +138,18 @@ class SystemLogIntegration:
             "enabled": self.config.enabled,
             "running": self.is_running(),
             "killswitch_active": self._check_killswitch(),
-            "registered_sources": list(self.config.file_paths.keys())
+            "registered_sources": list(self.config.file_paths.keys()),
+            "os_type": self._log_reader.os_type,
+            "permission_check": None
         }
+        
+        # Add permission check results
+        if self._permission_check:
+            status["permission_check"] = {
+                "has_permission": self._permission_check.has_permission,
+                "error_message": self._permission_check.error_message,
+                "requires_elevation": self._permission_check.requires_elevation
+            }
         
         if self._controller:
             status.update(self._controller.get_stats())

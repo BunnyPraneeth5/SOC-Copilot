@@ -20,6 +20,7 @@ class FileTailer:
         self._max_errors = 10
         self._last_size = 0
         self._encoding_errors = 0
+        self._file_handle: Optional[object] = None
     
     def start(self):
         """Start tailing file"""
@@ -43,6 +44,14 @@ class FileTailer:
         self._stop_event.set()
         if self._thread:
             self._thread.join(timeout=2.0)
+        
+        # Close file handle if open
+        if self._file_handle:
+            try:
+                self._file_handle.close()
+            except Exception:
+                pass
+            self._file_handle = None
     
     def _tail_loop(self):
         """Main tailing loop with robust error handling"""
@@ -77,6 +86,14 @@ class FileTailer:
                 if self._error_count >= self._max_errors:
                     break
                 time.sleep(1.0)
+        
+        # Cleanup on exit
+        if self._file_handle:
+            try:
+                self._file_handle.close()
+            except Exception:
+                pass
+            self._file_handle = None
     
     def _get_file_size_safe(self) -> Optional[int]:
         """Get file size with error handling"""

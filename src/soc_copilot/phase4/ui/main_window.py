@@ -9,6 +9,7 @@ from .alerts_view import AlertsView
 from .alert_details import AlertDetailsPanel
 from .assistant_panel import AssistantPanel
 from .controller_bridge import ControllerBridge
+from .config_panel import ConfigPanel
 
 
 class MainWindow(QMainWindow):
@@ -73,6 +74,9 @@ class MainWindow(QMainWindow):
         self.assistant_panel = AssistantPanel()
         tabs.addTab(self.assistant_panel, "Assistant")
         
+        self.config_panel = ConfigPanel(self.bridge)
+        tabs.addTab(self.config_panel, "Configuration")
+        
         splitter.addWidget(tabs)
         
         # Set splitter sizes (60% alerts, 40% details)
@@ -84,7 +88,52 @@ class MainWindow(QMainWindow):
         # Status bar
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
-        self.status_bar.showMessage("Ready")
+        self._update_status_bar()
+        
+        # Update status bar periodically
+        from PyQt6.QtCore import QTimer
+        self.status_timer = QTimer()
+        self.status_timer.timeout.connect(self._update_status_bar)
+        self.status_timer.start(3000)
+    
+    def _update_status_bar(self):
+        """Update status bar with system info"""
+        try:
+            stats = self.bridge.get_stats()
+            
+            status_parts = []
+            
+            # Ingestion status
+            running = stats.get('running', False)
+            shutdown_flag = stats.get('shutdown_flag', False)
+            sources_count = stats.get('sources_count', 0)
+            
+            if shutdown_flag:
+                status_parts.append("⏸️ Ingestion: Stopped")
+            elif running and sources_count > 0:
+                status_parts.append("▶️ Ingestion: Active")
+            elif sources_count > 0:
+                status_parts.append("⏸️ Ingestion: Configured")
+            else:
+                status_parts.append("⏹️ Ingestion: Not Started")
+            
+            # Kill switch (if active, show warning)
+            # Note: If kill switch is active, app wouldn't start, but check anyway
+            
+            # Permission status (if available from system log integration)
+            permission_check = stats.get('permission_check')
+            if permission_check and not permission_check.get('has_permission', True):
+                status_parts.append("⚠️ Permissions: Limited")
+            
+            # Dropped records warning
+            dropped = stats.get('dropped_count', 0)
+            if dropped > 0:
+                status_parts.append(f"⚠️ Dropped: {dropped}")
+            
+            self.status_bar.showMessage(" | ".join(status_parts) if status_parts else "Ready")
+            
+        except Exception:
+            self.status_bar.showMessage("Status unavailable")
     
     def _on_alert_selected(self, batch_id: str, alert_classification: str):
         """Handle alert selection"""

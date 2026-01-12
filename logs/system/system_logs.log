@@ -1,0 +1,13 @@
+2026-01-12 23:40:02,506 - __main__ - INFO - Starting system log ingestion
+2026-01-12 23:40:02,534 - __main__ - WARNING - Kill switch is enabled
+2026-01-12 23:45:27,524 - __main__ - INFO - Starting system log ingestion
+2026-01-12 23:45:30,902 - __main__ - INFO - AppController initialized
+2026-01-12 23:45:30,905 - __main__ - INFO - System logs enabled successfully
+2026-01-12 23:45:30,905 - __main__ - ERROR - Fatal error: System log ingestion is disabled in config
+Traceback (most recent call last):
+  File "C:\Users\karup\projects\SOC Copilot\run_system_logs.py", line 64, in main
+    system_logs.start()
+    ~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\karup\projects\SOC Copilot\src\soc_copilot\phase4\ingestion\system_logs.py", line 113, in start
+    raise RuntimeError("System log ingestion is disabled in config")
+RuntimeError: System log ingestion is disabled in config

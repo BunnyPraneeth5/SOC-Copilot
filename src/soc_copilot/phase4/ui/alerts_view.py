@@ -15,7 +15,7 @@ class AlertsView(QWidget):
         self.bridge = bridge
         self._init_ui()
         
-        # Auto-refresh every 5 seconds (less aggressive)
+        # Auto-refresh every 5 seconds
         self.timer = QTimer()
         self.timer.timeout.connect(self.refresh)
         self.timer.start(5000)
@@ -92,7 +92,20 @@ class AlertsView(QWidget):
         try:
             stats = self.bridge.get_stats()
             pipeline_active = stats.get("pipeline_loaded", False)
-            ingestion_running = stats.get("ingestion_running", False)
+            
+            # Get ingestion status
+            running = stats.get('running', False)
+            shutdown_flag = stats.get('shutdown_flag', False)
+            sources_count = stats.get('sources_count', 0)
+            
+            if shutdown_flag:
+                ingestion_status = "Stopped"
+            elif running and sources_count > 0:
+                ingestion_status = "Active"
+            elif sources_count > 0:
+                ingestion_status = "Configured"
+            else:
+                ingestion_status = "Not Started"
             
             if not pipeline_active:
                 message = (
@@ -100,16 +113,26 @@ class AlertsView(QWidget):
                     "Models may be missing. Run:\n"
                     "python scripts/train_models.py"
                 )
-            elif not ingestion_running:
+            elif ingestion_status == "Not Started":
                 message = (
                     "📁 No log sources configured\n\n"
                     "Add log files or directories to start monitoring"
                 )
+            elif ingestion_status == "Stopped":
+                message = (
+                    "⏸️ Ingestion stopped\n\n"
+                    "Restart the application to resume monitoring"
+                )
+            elif ingestion_status == "Active":
+                message = (
+                    "🔄 Monitoring active - No alerts yet\n\n"
+                    "System is actively monitoring for security threats.\n"
+                    "This is good - no threats detected!"
+                )
             else:
                 message = (
                     "✅ No alerts detected\n\n"
-                    "System is monitoring for security threats.\n"
-                    "This is good - no threats detected!"
+                    "System is ready to monitor for security threats."
                 )
             
             self.empty_label.setText(message)

@@ -9,6 +9,60 @@ project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root / "src"))
 
 
+def check_required_permissions(project_root: Path) -> bool:
+    """Check required directory permissions before startup"""
+    required_dirs = [
+        project_root / "data",
+        project_root / "logs"
+    ]
+    
+    for dir_path in required_dirs:
+        try:
+            # Create if doesn't exist
+            dir_path.mkdir(parents=True, exist_ok=True)
+            
+            # Test write access
+            test_file = dir_path / ".write_test"
+            test_file.write_text("test")
+            test_file.unlink()
+        except (OSError, PermissionError) as e:
+            print(f"Error: No write access to {dir_path}")
+            print(f"Details: {e}")
+            print("\nRemediation:")
+            if sys.platform == "win32":
+                print("  - Run as Administrator, or")
+                print("  - Change directory permissions")
+            else:
+                print(f"  - Run: chmod -R u+w {dir_path}")
+            return False
+    
+    return True
+
+
+def check_optional_permissions(project_root: Path) -> dict:
+    """Check optional system log permissions"""
+    result = {"has_system_log_access": False, "message": None}
+    
+    try:
+        from soc_copilot.phase4.ingestion.system_log_reader import SystemLogReader
+        
+        reader = SystemLogReader()
+        perm_check = reader.validate_system_log_access()
+        
+        result["has_system_log_access"] = perm_check.has_permission
+        
+        if not perm_check.has_permission:
+            result["message"] = perm_check.error_message
+            if perm_check.requires_elevation:
+                print("\nNote: System log access limited")
+                print(f"Reason: {perm_check.error_message}")
+                print("Impact: System log ingestion unavailable (file-based ingestion still works)")
+    except Exception:
+        pass  # Optional check, don't fail
+    
+    return result
+
+
 def main():
     """Launch SOC Copilot UI with robust error handling and graceful degradation"""
     try:
@@ -27,6 +81,15 @@ def main():
             print("Kill switch is active. Application disabled.")
             print(f"Remove {kill_switch.kill_file} to re-enable.")
             sys.exit(1)
+        
+        # Check required permissions
+        if not check_required_permissions(project_root):
+            print("\nCannot start: Required permissions missing.")
+            print("Run 'python setup.py' to fix permissions.")
+            sys.exit(1)
+        
+        # Check optional permissions (non-blocking)
+        optional_perms = check_optional_permissions(project_root)
         
         # Import PyQt6 with helpful error message
         try:

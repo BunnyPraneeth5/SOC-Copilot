@@ -195,6 +195,39 @@ def check_configuration():
     return len(missing_configs) == 0
 
 
+def check_system_log_permissions():
+    """Check system log access permissions"""
+    print("\nSystem Log Permissions Check")
+    print("=" * 40)
+    
+    try:
+        from soc_copilot.phase4.ingestion.system_log_reader import SystemLogReader
+        
+        reader = SystemLogReader()
+        result = reader.validate_system_log_access()
+        
+        if result.has_permission:
+            print("[OK] System log access available")
+            return True
+        else:
+            print(f"[OPTIONAL] System log access limited: {result.error_message}")
+            if result.requires_elevation:
+                if reader.os_type == "Windows":
+                    print("  To enable: Run as Administrator")
+                elif reader.os_type == "Linux":
+                    print("  To enable: Run with sudo or add user to appropriate group")
+            print("  Impact: System log ingestion will not be available")
+            print("  Note: Application can still run with file-based log ingestion")
+            return False
+    
+    except ImportError:
+        print("[SKIP] System log reader not available")
+        return False
+    except Exception as e:
+        print(f"[ERROR] Permission check failed: {e}")
+        return False
+
+
 def check_permissions():
     """Check file permissions and write access"""
     print("\nPermissions Check")
@@ -238,6 +271,7 @@ def main():
         ("File Structure", check_file_structure),
         ("Configuration", check_configuration),
         ("Permissions", check_permissions),
+        ("System Log Permissions", check_system_log_permissions),
         ("Models", check_models)
     ]
     
@@ -256,7 +290,7 @@ def main():
     print("=" * 50)
     
     critical_checks = ["System Requirements", "Dependencies", "File Structure", "Permissions"]
-    optional_checks = ["Configuration", "Models"]
+    optional_checks = ["Configuration", "Models", "System Log Permissions"]
     
     critical_passed = all(results.get(check, False) for check in critical_checks)
     optional_passed = all(results.get(check, False) for check in optional_checks)

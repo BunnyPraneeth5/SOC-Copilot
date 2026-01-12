@@ -82,9 +82,6 @@ class Dashboard(QWidget):
     def refresh(self):
         """Refresh dashboard metrics with error handling"""
         try:
-            # Show loading state
-            self.status_label.setText("Status: Loading...")
-            
             results = self.bridge.get_latest_alerts(limit=100)
             
             # Count alerts by priority
@@ -110,21 +107,27 @@ class Dashboard(QWidget):
             self._update_metric_safe(self.high_label, str(high))
             self._update_metric_safe(self.medium_label, str(medium))
             
-            # Update status
+            # Update status with ingestion info
             stats = self.bridge.get_stats()
             pipeline_status = "Active" if stats.get("pipeline_loaded") else "Inactive"
             results_count = stats.get('results_stored', 0)
-            ingestion_running = stats.get('ingestion_running', False)
+            
+            # Get ingestion status
+            ingestion_status = self._get_ingestion_status(stats)
             
             status_parts = [f"Pipeline: {pipeline_status}"]
-            if ingestion_running:
-                status_parts.append("Ingestion: Active")
+            status_parts.append(f"Ingestion: {ingestion_status}")
             status_parts.append(f"Results: {results_count}")
+            
+            # Add dropped records if any
+            dropped = stats.get('dropped_count', 0)
+            if dropped > 0:
+                status_parts.append(f"⚠️ Dropped: {dropped}")
             
             self.status_label.setText(" | ".join(status_parts))
             
             # Handle empty state with better messaging
-            self._update_empty_state(total, results_count, pipeline_status, ingestion_running)
+            self._update_empty_state(total, results_count, pipeline_status, ingestion_status, stats)
             
         except Exception as e:
             error_msg = str(e)[:50] + "..." if len(str(e)) > 50 else str(e)
@@ -140,7 +143,23 @@ class Dashboard(QWidget):
         except Exception:
             pass  # Ignore update errors
     
-    def _update_empty_state(self, total: int, results_count: int, pipeline_status: str, ingestion_running: bool):
+    def _get_ingestion_status(self, stats: dict) -> str:
+        """Get ingestion status from stats"""
+        running = stats.get('running', False)
+        shutdown_flag = stats.get('shutdown_flag', False)
+        sources_count = stats.get('sources_count', 0)
+        
+        if shutdown_flag:
+            return "Stopped"
+        elif running and sources_count > 0:
+            return "Active"
+        elif sources_count > 0:
+            return "Configured"
+        else:
+            return "Not Started"
+    
+    def _update_empty_state(self, total: int, results_count: int, pipeline_status: str, 
+                           ingestion_status: str, stats: dict):
         """Update empty state message based on system state"""
         if total == 0:
             if pipeline_status != "Active":
@@ -148,9 +167,13 @@ class Dashboard(QWidget):
                     "⚠️ Pipeline inactive. Run 'python scripts/train_models.py' if models are missing, "
                     "then restart the application."
                 )
-            elif not ingestion_running:
+            elif ingestion_status == "Not Started":
                 self.empty_state_label.setText(
                     "📁 No log sources configured. Use the interface to add log files or directories to monitor."
+                )
+            elif ingestion_status == "Stopped":
+                self.empty_state_label.setText(
+                    "⏸️ Ingestion stopped. Restart the application to resume monitoring."
                 )
             elif results_count == 0:
                 self.empty_state_label.setText(

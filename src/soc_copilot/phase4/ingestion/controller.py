@@ -21,6 +21,7 @@ class IngestionController:
         self._sources = []
         self._flush_thread: Optional[Thread] = None
         self._stop_event = Event()
+        self._shutdown_flag = False
         self._batch_callback: Optional[Callable[[List[dict]], None]] = None
         self._stats = {
             "lines_processed": 0,
@@ -76,6 +77,7 @@ class IngestionController:
     
     def stop(self):
         """Stop ingestion gracefully"""
+        self._shutdown_flag = True
         self._stop_event.set()
         
         # Stop all sources
@@ -101,6 +103,10 @@ class IngestionController:
     
     def _on_line(self, line: str):
         """Handle new log line with error tracking"""
+        # Check shutdown flag first
+        if self._shutdown_flag:
+            return
+        
         try:
             # Check kill switch
             if self.killswitch_check and self.killswitch_check():
@@ -116,7 +122,7 @@ class IngestionController:
     
     def _flush_loop(self):
         """Periodic buffer flush loop with error handling"""
-        while not self._stop_event.is_set():
+        while not self._stop_event.is_set() and not self._shutdown_flag:
             try:
                 # Check kill switch
                 if self.killswitch_check and self.killswitch_check():
@@ -146,10 +152,11 @@ class IngestionController:
         """Get comprehensive ingestion statistics"""
         base_stats = {
             "running": self.is_running(),
-            "buffer_size": self.buffer.size(),
+            "shutdown_flag": self._shutdown_flag,
             "sources_count": len(self._sources),
             "batch_interval": self.batch_interval,
-            **self._stats
+            **self._stats,
+            **self.buffer.get_stats()
         }
         
         # Add source-specific stats
