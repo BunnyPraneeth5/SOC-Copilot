@@ -1,0 +1,29 @@
+# Governance Policy Configuration
+# Sprint-13: Governance & Control Layer
+
+# Default authority state (MUST be disabled)
+default_state: disabled
+
+# Permitted components per authority state
+permitted_components:
+  disabled: []
+  
+  observe_only:
+    - logging
+    - monitoring
+  
+  advisory_only:
+    - logging
+    - monitoring
+    - recommendations
+
+# Safety constraints
+safety:
+  # All authority states default to DISABLED
+  enforce_disabled_default: true
+  
+  # Manual approval required for state changes
+  require_manual_approval: true
+  
+  # Kill switch overrides all permissions
+  killswitch_priority: highest

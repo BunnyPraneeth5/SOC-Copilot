@@ -1,0 +1,13 @@
+SOC Copilot Desktop Application
+Version: 0.1.0
+Build Date: 2026-01-13
+Platform: Windows x64
+
+Features:
+- Hybrid ML Detection (Isolation Forest + Random Forest)
+- Real-time Log Ingestion
+- Offline Operation
+- Governance Controls
+
+© 2026 SOC Copilot Team
+MIT License

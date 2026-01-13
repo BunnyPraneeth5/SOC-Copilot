@@ -106,6 +106,7 @@ def main():
         try:
             from soc_copilot.phase4.controller import AppController
             from soc_copilot.phase4.ui import MainWindow
+            from soc_copilot.phase4.ui.splash_screen import create_splash
         except ImportError as e:
             print("Error: SOC Copilot modules not found.")
             print(f"Details: {e}")
@@ -175,10 +176,18 @@ def main():
         except AttributeError:
             pass  # Older Qt versions
         
+        # Show splash screen
+        splash = create_splash()
+        splash.show_message("Loading models...")
+        
         # Create main window
         try:
+            splash.show_message("Initializing UI...")
             window = MainWindow(controller)
             window.show()
+            
+            # Close splash screen
+            splash.finish(window)
             
             # Show status message
             if models_available:

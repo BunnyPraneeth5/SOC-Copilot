@@ -11,3 +11,9 @@ Traceback (most recent call last):
   File "C:\Users\karup\projects\SOC Copilot\src\soc_copilot\phase4\ingestion\system_logs.py", line 113, in start
     raise RuntimeError("System log ingestion is disabled in config")
 RuntimeError: System log ingestion is disabled in config
+2026-01-13 11:19:20,993 - __main__ - INFO - Starting system log ingestion
+2026-01-13 11:19:22,303 - __main__ - INFO - AppController initialized
+2026-01-13 11:19:22,307 - __main__ - INFO - System logs enabled successfully
+2026-01-13 11:19:22,309 - __main__ - INFO - Ingestion started
+2026-01-13 11:20:19,605 - __main__ - INFO - Received interrupt signal
+2026-01-13 11:20:20,032 - __main__ - INFO - Ingestion stopped cleanly

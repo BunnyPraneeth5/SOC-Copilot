@@ -55,6 +55,9 @@ dev = [
     "mypy>=1.4.0",
     "pre-commit>=3.3.0",
 ]
+build = [
+    "pyinstaller>=6.0.0",
+]
 
 [project.scripts]
 soc-copilot = "soc_copilot.main:main"

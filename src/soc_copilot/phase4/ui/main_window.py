@@ -1,8 +1,10 @@
 """Main window application shell"""
 
 from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-                             QSplitter, QTabWidget, QStatusBar)
+                             QSplitter, QTabWidget, QStatusBar, QMenuBar, QMenu)
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QAction, QIcon, QPixmap, QPainter, QColor, QPen, QPolygonF
+from PyQt6.QtCore import QPointF
 
 from .dashboard import Dashboard
 from .alerts_view import AlertsView
@@ -10,15 +12,20 @@ from .alert_details import AlertDetailsPanel
 from .assistant_panel import AssistantPanel
 from .controller_bridge import ControllerBridge
 from .config_panel import ConfigPanel
+from .about_dialog import AboutDialog
 
 
 class MainWindow(QMainWindow):
     """SOC Copilot main application window"""
     
+    VERSION = "0.1.0"
+    
     def __init__(self, controller):
         super().__init__()
         self.bridge = ControllerBridge(controller)
         self._init_ui()
+        self._init_menu()
+        self._set_window_icon()
     
     def _init_ui(self):
         self.setWindowTitle("SOC Copilot - Real-Time Security Analysis")
@@ -153,3 +160,91 @@ class MainWindow(QMainWindow):
         
         except Exception as e:
             self.status_bar.showMessage(f"Error: {str(e)}")
+    
+    def _init_menu(self):
+        """Initialize menu bar with Help menu"""
+        menubar = self.menuBar()
+        menubar.setStyleSheet("""
+            QMenuBar {
+                background-color: #2b2b2b;
+                color: #ffffff;
+                padding: 2px;
+            }
+            QMenuBar::item {
+                padding: 5px 10px;
+            }
+            QMenuBar::item:selected {
+                background-color: #3c3c3c;
+            }
+            QMenu {
+                background-color: #2b2b2b;
+                color: #ffffff;
+                border: 1px solid #444444;
+            }
+            QMenu::item:selected {
+                background-color: #00d4ff;
+                color: #1e1e1e;
+            }
+        """)
+        
+        # Help menu
+        help_menu = menubar.addMenu("&Help")
+        
+        # About action
+        about_action = QAction("&About SOC Copilot", self)
+        about_action.triggered.connect(self._show_about)
+        help_menu.addAction(about_action)
+        
+        # Documentation link (placeholder)
+        docs_action = QAction("&Documentation", self)
+        docs_action.setEnabled(False)  # Disabled for now
+        help_menu.addAction(docs_action)
+    
+    def _set_window_icon(self):
+        """Set the window icon programmatically"""
+        icon = QIcon(self._create_icon_pixmap())
+        self.setWindowIcon(icon)
+    
+    def _create_icon_pixmap(self) -> QPixmap:
+        """Create shield icon programmatically for window icon"""
+        size = 64
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        # Draw shield shape
+        painter.setPen(QPen(QColor("#00d4ff"), 2))
+        painter.setBrush(QColor("#1e3a5f"))
+        
+        x, y = 4, 4
+        s = size - 8
+        
+        shield_points = [
+            QPointF(x + s/2, y),
+            QPointF(x + s, y + s*0.3),
+            QPointF(x + s, y + s*0.6),
+            QPointF(x + s/2, y + s),
+            QPointF(x, y + s*0.6),
+            QPointF(x, y + s*0.3),
+        ]
+        painter.drawPolygon(QPolygonF(shield_points))
+        
+        # Draw magnifying glass inside shield
+        painter.setPen(QPen(QColor("#00d4ff"), 2))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawEllipse(int(x + s*0.3), int(y + s*0.25), int(s*0.4), int(s*0.4))
+        painter.drawLine(
+            int(x + s*0.6), int(y + s*0.55),
+            int(x + s*0.75), int(y + s*0.7)
+        )
+        
+        painter.end()
+        return pixmap
+    
+    def _show_about(self):
+        """Show about dialog"""
+        dialog = AboutDialog(self)
+        dialog.exec()
+
