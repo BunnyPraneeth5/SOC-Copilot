@@ -1,6 +1,6 @@
 SOC Copilot Desktop Application
 Version: 0.1.0
-Build Date: 2026-01-13
+Build Date: 2026-01-17
 Platform: Windows x64
 
 Features:

@@ -39,21 +39,21 @@ def check_requirements(project_root: Path) -> bool:
     # Check PyInstaller
     try:
         import PyInstaller
-        print(f"  ✓ PyInstaller {PyInstaller.__version__}")
+        print(f"  [OK] PyInstaller {PyInstaller.__version__}")
     except ImportError:
         errors.append("PyInstaller not installed. Run: pip install pyinstaller>=6.0.0")
     
     # Check spec file
     spec_file = project_root / "soc_copilot.spec"
     if spec_file.exists():
-        print(f"  ✓ Spec file found: {spec_file.name}")
+        print(f"  [OK] Spec file found: {spec_file.name}")
     else:
         errors.append(f"Spec file not found: {spec_file}")
     
     # Check source
     src_dir = project_root / "src" / "soc_copilot"
     if src_dir.exists():
-        print(f"  ✓ Source directory found")
+        print(f"  [OK] Source directory found")
     else:
         errors.append(f"Source not found: {src_dir}")
     
@@ -71,24 +71,41 @@ def check_requirements(project_root: Path) -> bool:
         if missing:
             errors.append(f"Missing models: {', '.join(missing)}")
         else:
-            print(f"  ✓ All required models found")
+            print(f"  [OK] All required models found")
     else:
         errors.append(f"Models directory not found: {models_dir}")
     
     # Check config
     config_dir = project_root / "config"
     if config_dir.exists():
-        print(f"  ✓ Config directory found")
+        print(f"  [OK] Config directory found")
     else:
         errors.append(f"Config not found: {config_dir}")
     
+    # Check assets (generate if missing)
+    assets_dir = project_root / "assets"
+    icon_file = assets_dir / "icon.ico"
+    if not icon_file.exists():
+        print("  Icon not found, attempting to generate...")
+        try:
+            from generate_assets import generate_ico_file
+            success = generate_ico_file(icon_file)
+            if success:
+                print(f"  [OK] Generated icon.ico")
+            else:
+                print(f"  Warning: Could not generate icon (will use default)")
+        except Exception as e:
+            print(f"  Warning: Could not generate icon: {e}")
+    else:
+        print(f"  [OK] Icon found")
+    
     if errors:
-        print("\n❌ Build requirements not met:")
+        print("\nBuild requirements not met:")
         for error in errors:
             print(f"  - {error}")
         return False
     
-    print("\n✓ All requirements satisfied")
+    print("\n[OK] All requirements satisfied")
     return True
 
 
@@ -106,7 +123,7 @@ def clean_build(project_root: Path):
             print(f"  Removing {dir_path}")
             shutil.rmtree(dir_path)
     
-    print("  ✓ Clean complete")
+    print("  [OK] Clean complete")
 
 
 def run_pyinstaller(project_root: Path) -> bool:
@@ -134,7 +151,7 @@ def run_pyinstaller(project_root: Path) -> bool:
     print("-" * 60)
     
     if result.returncode != 0:
-        print(f"\n❌ Build failed with exit code {result.returncode}")
+        print(f"\n[FAIL] Build failed with exit code {result.returncode}")
         return False
     
     return True
@@ -148,28 +165,29 @@ def verify_build(project_root: Path) -> bool:
     exe_path = dist_dir / "SOC Copilot.exe"
     
     if not dist_dir.exists():
-        print(f"  ❌ Distribution directory not found: {dist_dir}")
+        print(f"  [FAIL] Distribution directory not found: {dist_dir}")
         return False
     
     if not exe_path.exists():
-        print(f"  ❌ Executable not found: {exe_path}")
+        print(f"  [FAIL] Executable not found: {exe_path}")
         return False
     
     # Check file size
     exe_size = exe_path.stat().st_size / (1024 * 1024)  # MB
-    print(f"  ✓ Executable: {exe_path.name} ({exe_size:.1f} MB)")
+    print(f"  [OK] Executable: {exe_path.name} ({exe_size:.1f} MB)")
     
-    # Check bundled files
-    config_bundled = (dist_dir / "config").exists()
-    models_bundled = (dist_dir / "data" / "models").exists()
+    # Check bundled files (PyInstaller 6.x puts them in _internal)
+    internal_dir = dist_dir / "_internal"
+    config_bundled = (internal_dir / "config").exists()
+    models_bundled = (internal_dir / "data" / "models").exists()
     
-    print(f"  ✓ Config bundled: {config_bundled}")
-    print(f"  ✓ Models bundled: {models_bundled}")
+    print(f"  [OK] Config bundled: {config_bundled}")
+    print(f"  [OK] Models bundled: {models_bundled}")
     
     # Calculate total distribution size
     total_size = sum(f.stat().st_size for f in dist_dir.rglob("*") if f.is_file())
     total_size_mb = total_size / (1024 * 1024)
-    print(f"  ✓ Total distribution size: {total_size_mb:.1f} MB")
+    print(f"  [OK] Total distribution size: {total_size_mb:.1f} MB")
     
     return True
 
@@ -201,7 +219,7 @@ MIT License
     
     if dist_dir.exists():
         version_file.write_text(content)
-        print(f"  ✓ Created {version_file.name}")
+        print(f"  [OK] Created {version_file.name}")
 
 
 def main():
@@ -220,7 +238,7 @@ def main():
         sys.exit(1)
     
     if args.dry_run:
-        print("\n✓ Dry run complete - all requirements satisfied")
+        print("\n[OK] Dry run complete - all requirements satisfied")
         sys.exit(0)
     
     # Clean if requested
@@ -239,7 +257,7 @@ def main():
     create_version_file(project_root)
     
     print("\n" + "=" * 60)
-    print("✓ BUILD SUCCESSFUL")
+    print("[OK] BUILD SUCCESSFUL")
     print("=" * 60)
     print(f"\nExecutable: {project_root / 'dist' / 'SOC Copilot' / 'SOC Copilot.exe'}")
     print("\nTo test: Run the executable directly")

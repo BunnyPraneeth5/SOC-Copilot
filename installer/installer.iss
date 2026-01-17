@@ -64,9 +64,7 @@ Name: "startmenuicon"; Description: "Create Start Menu shortcut"; GroupDescripti
 ; Main application files from PyInstaller output
 Source: "..\dist\SOC Copilot\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
-; Create writable directories
-Source: "..\dist\SOC Copilot\logs\*"; DestDir: "{app}\logs"; Flags: ignoreversion recursesubdirs createallsubdirs; Permissions: users-modify
-Source: "..\dist\SOC Copilot\data\*"; DestDir: "{app}\data"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Note: logs and data directories are created by [Dirs] section below
 
 [Dirs]
 ; Ensure logs directory exists and is writable

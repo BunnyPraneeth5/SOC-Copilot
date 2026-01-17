@@ -404,7 +404,7 @@ class TestIngestionController:
         assert stats["running"] is False
         assert stats["sources_count"] == 1
         assert stats["batch_interval"] == 5.0
-        assert stats["buffer_size"] == 0
+        assert stats["size"] == 0
         
         controller.start()
         time.sleep(0.2)

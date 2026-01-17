@@ -1,6 +1,4 @@
-"""Dashboard with metrics overview"""
-
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QPushButton, QFileDialog
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont
 
@@ -24,10 +22,38 @@ class Dashboard(QWidget):
     def _init_ui(self):
         layout = QVBoxLayout()
         
-        # Title
+        # Header row with title and upload button
+        header_layout = QHBoxLayout()
+        
         title = QLabel("SOC Copilot Dashboard")
         title.setFont(QFont("Arial", 16, QFont.Weight.Bold))
-        layout.addWidget(title)
+        header_layout.addWidget(title)
+        
+        header_layout.addStretch()
+        
+        # Upload button
+        self.upload_btn = QPushButton("📁 Upload Logs")
+        self.upload_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #00d4ff;
+                color: #1e1e1e;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 5px;
+                font-weight: bold;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #00a8cc;
+            }
+            QPushButton:pressed {
+                background-color: #0088aa;
+            }
+        """)
+        self.upload_btn.clicked.connect(self._upload_logs)
+        header_layout.addWidget(self.upload_btn)
+        
+        layout.addLayout(header_layout)
         
         # Metrics row
         metrics_layout = QHBoxLayout()
@@ -169,7 +195,7 @@ class Dashboard(QWidget):
                 )
             elif ingestion_status == "Not Started":
                 self.empty_state_label.setText(
-                    "📁 No log sources configured. Use the interface to add log files or directories to monitor."
+                    "📁 No log sources configured. Click 'Upload Logs' to add log files for analysis."
                 )
             elif ingestion_status == "Stopped":
                 self.empty_state_label.setText(
@@ -185,3 +211,44 @@ class Dashboard(QWidget):
                 )
         else:
             self.empty_state_label.setText("")
+    
+    def _upload_logs(self):
+        """Open file dialog and start log analysis"""
+        files, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Select Log Files",
+            "",
+            "Log Files (*.csv *.json *.evtx);;CSV Files (*.csv);;JSON Files (*.json);;EVTX Files (*.evtx);;All Files (*.*)"
+        )
+        
+        if files:
+            try:
+                # Update button to show loading state
+                self.upload_btn.setText("⏳ Processing...")
+                self.upload_btn.setEnabled(False)
+                
+                # Add files and start ingestion
+                for file_path in files:
+                    self.bridge.add_file_source(file_path)
+                
+                # Start ingestion if not already running
+                self.bridge.start_ingestion()
+                
+                # Update status
+                self.status_label.setText(f"Status: Added {len(files)} file(s) for analysis...")
+                
+                # Reset button after a short delay
+                QTimer.singleShot(2000, self._reset_upload_button)
+                
+                # Force refresh to show results
+                QTimer.singleShot(3000, self.refresh)
+                
+            except Exception as e:
+                self.status_label.setText(f"Error: {str(e)[:50]}")
+                self._reset_upload_button()
+    
+    def _reset_upload_button(self):
+        """Reset upload button to normal state"""
+        self.upload_btn.setText("📁 Upload Logs")
+        self.upload_btn.setEnabled(True)
+
