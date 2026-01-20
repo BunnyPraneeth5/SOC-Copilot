@@ -69,11 +69,28 @@ class AppController:
     
     def _analyze_lines(self, lines: List[str]):
         """Analyze lines using existing pipeline"""
-        # Create temp file for batch
         import tempfile
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.log', delete=False) as f:
+        import json
+        
+        # Create temp file in JSONL format for proper parsing
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False, encoding='utf-8') as f:
             for line in lines:
-                f.write(line + '\n')
+                # Try to parse as JSON, otherwise wrap as raw log
+                try:
+                    # If it's already valid JSON, write as-is
+                    json.loads(line)
+                    f.write(line + '\n')
+                except (json.JSONDecodeError, TypeError):
+                    # Wrap non-JSON content as a raw log entry
+                    log_entry = {
+                        "timestamp": "2026-01-17T00:00:00Z",
+                        "raw_log": line,
+                        "src_ip": "0.0.0.0",
+                        "dst_ip": "0.0.0.0",
+                        "protocol": "TCP",
+                        "action": "log_entry"
+                    }
+                    f.write(json.dumps(log_entry) + '\n')
             temp_path = f.name
         
         try:

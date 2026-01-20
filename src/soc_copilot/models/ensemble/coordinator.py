@@ -233,12 +233,14 @@ class EnsembleCoordinator:
         
         result.reasoning = reasoning
         
-        logger.debug(
-            "ensemble_score_computed",
-            risk_score=combined,
-            risk_level=result.risk_level.value,
-            classification=classification,
-        )
+        # Only log non-benign events to reduce spam
+        if result.threat_category != ThreatCategory.BENIGN or result.risk_level != RiskLevel.LOW:
+            logger.debug(
+                "ensemble_score_computed",
+                risk_score=combined,
+                risk_level=result.risk_level.value,
+                classification=classification,
+            )
         
         return result
     

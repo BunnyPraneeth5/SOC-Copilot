@@ -127,10 +127,6 @@ class AlertGenerator:
         """
         # Only generate alerts for medium+ priority
         if not ensemble_result.requires_alert:
-            logger.debug(
-                "alert_not_required",
-                priority=ensemble_result.alert_priority.value,
-            )
             return None
         
         # Get MITRE mappings

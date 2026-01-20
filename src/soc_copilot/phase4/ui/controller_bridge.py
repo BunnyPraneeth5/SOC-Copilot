@@ -1,15 +1,40 @@
 """Read-only bridge between UI and AppController"""
 
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from pathlib import Path
+from datetime import datetime
 from ..controller import AppController, AnalysisResult
 
 
 class ControllerBridge:
-    """Adapter for UI to access AppController with file upload support"""
+    """Adapter for UI to access AppController with file upload support and status reporting"""
     
     def __init__(self, controller: AppController):
         self._controller = controller
+        self._permission_status = None
+        self._check_permissions()
+    
+    def _check_permissions(self):
+        """Check system permissions on init"""
+        import ctypes
+        import sys
+        
+        self._permission_status = {
+            "has_permission": False,
+            "elevation_required": True,
+            "reason": "Administrator rights required",
+            "checked_at": datetime.now().isoformat()
+        }
+        
+        # Check if running as admin on Windows
+        if sys.platform == 'win32':
+            try:
+                self._permission_status["has_permission"] = ctypes.windll.shell32.IsUserAnAdmin()
+                if self._permission_status["has_permission"]:
+                    self._permission_status["reason"] = "Full access"
+                    self._permission_status["elevation_required"] = False
+            except Exception:
+                pass
     
     def get_latest_alerts(self, limit: int = 50) -> List[AnalysisResult]:
         """Get latest analysis results (read-only)"""
@@ -19,9 +44,48 @@ class ControllerBridge:
         """Get specific result by ID (read-only)"""
         return self._controller.get_result_by_id(batch_id)
     
-    def get_stats(self) -> dict:
-        """Get controller statistics (read-only)"""
-        return self._controller.get_stats()
+    def get_stats(self) -> Dict[str, Any]:
+        """Get comprehensive controller statistics (read-only)"""
+        base_stats = self._controller.get_stats()
+        
+        # Enhance with additional status info
+        enhanced_stats = {
+            **base_stats,
+            "permission_check": self._permission_status,
+            "shutdown_flag": False,  # Default, updated if kill switch is checked
+        }
+        
+        # Check kill switch if available
+        if hasattr(self._controller, 'killswitch_check') and self._controller.killswitch_check:
+            try:
+                enhanced_stats["shutdown_flag"] = self._controller.killswitch_check()
+            except Exception:
+                pass
+        
+        return enhanced_stats
+    
+    def get_kill_switch_status(self) -> Dict[str, Any]:
+        """Get kill switch state (read-only)"""
+        is_active = False
+        reason = "Normal operation"
+        
+        if hasattr(self._controller, 'killswitch_check') and self._controller.killswitch_check:
+            try:
+                is_active = self._controller.killswitch_check()
+                if is_active:
+                    reason = "Kill switch engaged - processing halted"
+            except Exception as e:
+                reason = f"Check failed: {str(e)}"
+        
+        return {
+            "active": is_active,
+            "reason": reason,
+            "checked_at": datetime.now().isoformat()
+        }
+    
+    def get_permission_status(self) -> Dict[str, Any]:
+        """Get permission check results (read-only)"""
+        return self._permission_status
     
     def get_total_alert_count(self) -> int:
         """Get total stored alert count"""

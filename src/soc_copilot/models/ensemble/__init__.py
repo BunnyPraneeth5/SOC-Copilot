@@ -22,6 +22,7 @@ from soc_copilot.models.ensemble.pipeline import (
     AnalysisResult,
     create_analysis_pipeline,
 )
+from soc_copilot.models.ensemble.deduplication import EventDeduplicator
 
 __all__ = [
     # Coordinator
@@ -43,4 +44,6 @@ __all__ = [
     "AnalysisPipelineConfig",
     "AnalysisResult",
     "create_analysis_pipeline",
+    # Deduplication
+    "EventDeduplicator",
 ]

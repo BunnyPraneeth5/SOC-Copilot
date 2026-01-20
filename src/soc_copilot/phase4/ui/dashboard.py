@@ -1,254 +1,306 @@
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QPushButton, QFileDialog
-from PyQt6.QtCore import Qt, QTimer
+"""Interactive SOC Dashboard with Zone-Based Layout and Visual Hierarchy
+
+Zone Layout:
+- Zone A: Status Strip (40px) - Consolidated 3 LEDs
+- Zone B: Threat Summary Banner (80px) - Primary visual hierarchy
+- Zone C: Metric Cards Row (120px) - Alert breakdown with trends
+- Zone D+E: System Health + Quick Actions (combined row)
+- Zone F: Recent Alerts Timeline (flex height) - Clickable alerts
+"""
+
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, 
+    QPushButton, QFileDialog, QProgressBar, QSizePolicy
+)
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont
+from datetime import datetime
+
+from .dashboard_components import (
+    ThreatLevelBanner,
+    RecentAlertsTimeline,
+    QuickActionsBar,
+    CompactMetricCard,
+    SystemHealthGrid,
+    EmptyStateCard
+)
 
 
 class Dashboard(QWidget):
-    """Metrics overview dashboard with empty state handling"""
+    """Modern SOC Dashboard with Zone-Based Layout
+    
+    Visual Hierarchy (2-Second Rule):
+    1. Threat Level Banner - understand threat state in <1 second
+    2. Metric Cards - breakdown by priority in 1-2 seconds
+    3. System Health + Recent Alerts - details on demand
+    """
+    
+    navigate_to_alerts = pyqtSignal()
+    navigate_to_alerts_filtered = pyqtSignal(str)  # priority filter
+    navigate_to_settings = pyqtSignal()
+    alert_selected = pyqtSignal(str, str)  # batch_id, classification
     
     def __init__(self, bridge):
         super().__init__()
         self.bridge = bridge
+        self._last_counts = {"total": 0, "critical": 0, "high": 0, "medium": 0, "low": 0}
         self._init_ui()
         
-        # Auto-refresh every 5 seconds (less aggressive)
+        # Adaptive polling - 3 seconds (reduced from 1.5s for performance)
         self.timer = QTimer()
         self.timer.timeout.connect(self.refresh)
-        self.timer.start(5000)
+        self.timer.start(3000)
         
         # Initial refresh
         self.refresh()
     
     def _init_ui(self):
         layout = QVBoxLayout()
+        layout.setSpacing(12)
+        layout.setContentsMargins(20, 15, 20, 15)
         
-        # Header row with title and upload button
-        header_layout = QHBoxLayout()
+        # ─────────────────────────────────────────────────────────────
+        # ZONE B: Threat Summary Banner (Primary Hierarchy)
+        # ─────────────────────────────────────────────────────────────
+        self.threat_banner = ThreatLevelBanner()
+        self.threat_banner.view_alerts_clicked.connect(self.navigate_to_alerts.emit)
+        layout.addWidget(self.threat_banner)
         
-        title = QLabel("SOC Copilot Dashboard")
-        title.setFont(QFont("Arial", 16, QFont.Weight.Bold))
-        header_layout.addWidget(title)
-        
-        header_layout.addStretch()
-        
-        # Upload button
-        self.upload_btn = QPushButton("📁 Upload Logs")
-        self.upload_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #00d4ff;
-                color: #1e1e1e;
-                border: none;
-                padding: 10px 20px;
-                border-radius: 5px;
-                font-weight: bold;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: #00a8cc;
-            }
-            QPushButton:pressed {
-                background-color: #0088aa;
-            }
-        """)
-        self.upload_btn.clicked.connect(self._upload_logs)
-        header_layout.addWidget(self.upload_btn)
-        
-        layout.addLayout(header_layout)
-        
-        # Metrics row
+        # ─────────────────────────────────────────────────────────────
+        # ZONE C: Metric Cards Row (Secondary Hierarchy)
+        # ─────────────────────────────────────────────────────────────
         metrics_layout = QHBoxLayout()
+        metrics_layout.setSpacing(12)
         
-        self.total_label = self._create_metric_card("Total Alerts", "0")
-        self.critical_label = self._create_metric_card("Critical", "0", "#ff4444")
-        self.high_label = self._create_metric_card("High", "0", "#ff8800")
-        self.medium_label = self._create_metric_card("Medium", "0", "#ffaa00")
+        self.total_card = CompactMetricCard("Total Alerts", "total")
+        self.critical_card = CompactMetricCard("Critical", "critical")
+        self.high_card = CompactMetricCard("High", "high")
+        self.medium_card = CompactMetricCard("Medium", "medium")
+        self.low_card = CompactMetricCard("Low", "low")
         
-        metrics_layout.addWidget(self.total_label)
-        metrics_layout.addWidget(self.critical_label)
-        metrics_layout.addWidget(self.high_label)
-        metrics_layout.addWidget(self.medium_label)
+        # Connect card clicks to filtered navigation
+        self.total_card.clicked.connect(lambda p: self.navigate_to_alerts.emit())
+        self.critical_card.clicked.connect(lambda p: self.navigate_to_alerts_filtered.emit("critical"))
+        self.high_card.clicked.connect(lambda p: self.navigate_to_alerts_filtered.emit("high"))
+        self.medium_card.clicked.connect(lambda p: self.navigate_to_alerts_filtered.emit("medium"))
+        self.low_card.clicked.connect(lambda p: self.navigate_to_alerts_filtered.emit("low"))
+        
+        metrics_layout.addWidget(self.total_card)
+        metrics_layout.addWidget(self.critical_card)
+        metrics_layout.addWidget(self.high_card)
+        metrics_layout.addWidget(self.medium_card)
+        metrics_layout.addWidget(self.low_card)
         
         layout.addLayout(metrics_layout)
         
-        # Status and empty state
-        self.status_label = QLabel("Status: Initializing...")
-        layout.addWidget(self.status_label)
+        # ─────────────────────────────────────────────────────────────
+        # ZONE D+E: System Health + Quick Actions Row
+        # ─────────────────────────────────────────────────────────────
+        middle_row = QHBoxLayout()
+        middle_row.setSpacing(15)
         
-        self.empty_state_label = QLabel("")
-        self.empty_state_label.setStyleSheet("color: #888888; font-style: italic;")
-        self.empty_state_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.empty_state_label)
+        # System Health Grid (compact)
+        self.health_grid = SystemHealthGrid()
+        self.health_grid.setFixedWidth(300)
+        middle_row.addWidget(self.health_grid)
         
-        layout.addStretch()
+        # Quick Actions
+        self.quick_actions = QuickActionsBar()
+        self.quick_actions.upload_clicked.connect(self._upload_logs)
+        self.quick_actions.alerts_clicked.connect(self.navigate_to_alerts.emit)
+        self.quick_actions.settings_clicked.connect(self.navigate_to_settings.emit)
+        self.quick_actions.refresh_clicked.connect(self._manual_refresh)
+        middle_row.addWidget(self.quick_actions, 1)
+        
+        layout.addLayout(middle_row)
+        
+        # ─────────────────────────────────────────────────────────────
+        # Progress bar for file uploads (hidden by default)
+        # ─────────────────────────────────────────────────────────────
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        self.progress_bar.setFixedHeight(6)
+        self.progress_bar.setStyleSheet("""
+            QProgressBar {
+                border: none;
+                border-radius: 3px;
+                background-color: #1a1a2e;
+            }
+            QProgressBar::chunk {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #00d4ff, stop:1 #00ff88);
+                border-radius: 3px;
+            }
+        """)
+        layout.addWidget(self.progress_bar)
+        
+        # ─────────────────────────────────────────────────────────────
+        # ZONE F: Recent Alerts Timeline (Tertiary - scrollable)
+        # ─────────────────────────────────────────────────────────────
+        self.alerts_timeline = RecentAlertsTimeline()
+        self.alerts_timeline.alert_clicked.connect(self.alert_selected.emit)
+        self.alerts_timeline.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        layout.addWidget(self.alerts_timeline, 1)
+        
+        # ─────────────────────────────────────────────────────────────
+        # Footer: Last update time
+        # ─────────────────────────────────────────────────────────────
+        footer = QHBoxLayout()
+        self.last_update_label = QLabel("")
+        self.last_update_label.setFont(QFont("Segoe UI", 10))
+        self.last_update_label.setStyleSheet("color: #555555;")
+        footer.addStretch()
+        footer.addWidget(self.last_update_label)
+        layout.addLayout(footer)
+        
         self.setLayout(layout)
     
-    def _create_metric_card(self, title: str, value: str, color: str = "#4CAF50") -> QFrame:
-        """Create metric card widget"""
-        frame = QFrame()
-        frame.setFrameStyle(QFrame.Shape.Box)
-        frame.setStyleSheet(f"background-color: {color}; border-radius: 5px; padding: 10px;")
-        
-        layout = QVBoxLayout()
-        
-        title_label = QLabel(title)
-        title_label.setFont(QFont("Arial", 10))
-        title_label.setStyleSheet("color: white;")
-        
-        value_label = QLabel(value)
-        value_label.setFont(QFont("Arial", 20, QFont.Weight.Bold))
-        value_label.setStyleSheet("color: white;")
-        value_label.setObjectName("value")
-        
-        layout.addWidget(title_label)
-        layout.addWidget(value_label)
-        frame.setLayout(layout)
-        
-        return frame
-    
     def refresh(self):
-        """Refresh dashboard metrics with error handling"""
+        """Refresh dashboard with current data"""
         try:
             results = self.bridge.get_latest_alerts(limit=100)
             
-            # Count alerts by priority
-            total = 0
-            critical = 0
-            high = 0
-            medium = 0
+            # Count by priority
+            total = critical = high = medium = low = 0
+            alerts_data = []
             
             for result in results:
                 for alert in result.alerts:
                     total += 1
-                    priority_lower = alert.priority.lower()
-                    if "critical" in priority_lower:
+                    p = alert.priority.lower()
+                    
+                    if "critical" in p:
                         critical += 1
-                    elif "high" in priority_lower:
+                        priority = "critical"
+                    elif "high" in p:
                         high += 1
-                    elif "medium" in priority_lower:
+                        priority = "high"
+                    elif "medium" in p:
                         medium += 1
+                        priority = "medium"
+                    else:
+                        low += 1
+                        priority = "low"
+                    
+                    # Collect alert data for timeline
+                    alerts_data.append({
+                        "batch_id": result.batch_id,
+                        "classification": alert.classification,
+                        "priority": priority,
+                        "source_ip": getattr(alert, "source_ip", "") or "",
+                        "timestamp": datetime.now().strftime("%H:%M:%S")
+                    })
             
-            # Update labels safely
-            self._update_metric_safe(self.total_label, str(total))
-            self._update_metric_safe(self.critical_label, str(critical))
-            self._update_metric_safe(self.high_label, str(high))
-            self._update_metric_safe(self.medium_label, str(medium))
+            # Calculate trends (difference from last refresh)
+            trends = {
+                "total": total - self._last_counts["total"],
+                "critical": critical - self._last_counts["critical"],
+                "high": high - self._last_counts["high"],
+                "medium": medium - self._last_counts["medium"],
+                "low": low - self._last_counts["low"]
+            }
             
-            # Update status with ingestion info
-            stats = self.bridge.get_stats()
-            pipeline_status = "Active" if stats.get("pipeline_loaded") else "Inactive"
-            results_count = stats.get('results_stored', 0)
+            # Update last counts
+            self._last_counts = {
+                "total": total, "critical": critical, 
+                "high": high, "medium": medium, "low": low
+            }
             
-            # Get ingestion status
-            ingestion_status = self._get_ingestion_status(stats)
+            # Update Threat Level Banner (Primary Hierarchy)
+            self.threat_banner.set_threat_level(critical, high, medium, total)
             
-            status_parts = [f"Pipeline: {pipeline_status}"]
-            status_parts.append(f"Ingestion: {ingestion_status}")
-            status_parts.append(f"Results: {results_count}")
+            # Update Metric Cards with trends
+            self.total_card.set_value(total, trends["total"])
+            self.critical_card.set_value(critical, trends["critical"])
+            self.high_card.set_value(high, trends["high"])
+            self.medium_card.set_value(medium, trends["medium"])
+            self.low_card.set_value(low, trends["low"])
             
-            # Add dropped records if any
-            dropped = stats.get('dropped_count', 0)
-            if dropped > 0:
-                status_parts.append(f"⚠️ Dropped: {dropped}")
+            # Update Recent Alerts Timeline
+            self.alerts_timeline.update_alerts(alerts_data)
             
-            self.status_label.setText(" | ".join(status_parts))
+            # Update System Health Grid
+            self._update_system_health()
             
-            # Handle empty state with better messaging
-            self._update_empty_state(total, results_count, pipeline_status, ingestion_status, stats)
+            # Update footer
+            self.last_update_label.setText(
+                f"Last updated: {datetime.now().strftime('%H:%M:%S')}"
+            )
             
         except Exception as e:
-            error_msg = str(e)[:50] + "..." if len(str(e)) > 50 else str(e)
-            self.status_label.setText(f"Status: Error - {error_msg}")
-            self.empty_state_label.setText("Unable to load dashboard data. Check system status and logs.")
+            self.last_update_label.setText(f"Error: {str(e)[:40]}")
     
-    def _update_metric_safe(self, frame: QFrame, value: str):
-        """Safely update metric value"""
+    def _update_system_health(self):
+        """Update system health indicators"""
         try:
-            value_label = frame.findChild(QLabel, "value")
-            if value_label:
-                value_label.setText(value)
-        except Exception:
-            pass  # Ignore update errors
-    
-    def _get_ingestion_status(self, stats: dict) -> str:
-        """Get ingestion status from stats"""
-        running = stats.get('running', False)
-        shutdown_flag = stats.get('shutdown_flag', False)
-        sources_count = stats.get('sources_count', 0)
-        
-        if shutdown_flag:
-            return "Stopped"
-        elif running and sources_count > 0:
-            return "Active"
-        elif sources_count > 0:
-            return "Configured"
-        else:
-            return "Not Started"
-    
-    def _update_empty_state(self, total: int, results_count: int, pipeline_status: str, 
-                           ingestion_status: str, stats: dict):
-        """Update empty state message based on system state"""
-        if total == 0:
-            if pipeline_status != "Active":
-                self.empty_state_label.setText(
-                    "⚠️ Pipeline inactive. Run 'python scripts/train_models.py' if models are missing, "
-                    "then restart the application."
-                )
-            elif ingestion_status == "Not Started":
-                self.empty_state_label.setText(
-                    "📁 No log sources configured. Click 'Upload Logs' to add log files for analysis."
-                )
-            elif ingestion_status == "Stopped":
-                self.empty_state_label.setText(
-                    "⏸️ Ingestion stopped. Restart the application to resume monitoring."
-                )
-            elif results_count == 0:
-                self.empty_state_label.setText(
-                    "🔍 System is monitoring for threats. No alerts detected yet - this is good!"
-                )
+            stats = self.bridge.get_stats()
+            
+            # Pipeline status
+            if stats.get("pipeline_loaded"):
+                self.health_grid.update_status("pipeline", "Active", "Active", "#4CAF50")
             else:
-                self.empty_state_label.setText(
-                    "✅ No recent alerts. System is operating normally and monitoring for threats."
-                )
-        else:
-            self.empty_state_label.setText("")
+                self.health_grid.update_status("pipeline", "Loading", "Loading...", "#ffa000")
+            
+            # Ingestion status
+            running = stats.get("running", False)
+            sources = stats.get("sources_count", 0)
+            if running and sources > 0:
+                self.health_grid.update_status("ingestion", "Active", f"Active ({sources})", "#2196F3")
+            elif sources > 0:
+                self.health_grid.update_status("ingestion", "Idle", f"Idle ({sources})", "#888888")
+            else:
+                self.health_grid.update_status("ingestion", "Not Started", "Not Started", "#888888")
+            
+            # Governance status (combines kill switch + permissions)
+            shutdown = stats.get("shutdown_flag", False)
+            permission_check = stats.get("permission_check", {})
+            has_permission = permission_check.get("has_permission", True)
+            
+            if shutdown:
+                self.health_grid.update_status("governance", "Halted", "Kill Switch ON", "#ff4444")
+            elif not has_permission:
+                self.health_grid.update_status("governance", "Limited", "Limited Access", "#ffa000")
+            else:
+                self.health_grid.update_status("governance", "Active", "Full Access", "#4CAF50")
+                
+        except Exception:
+            pass
+    
+    def _manual_refresh(self):
+        """Manual refresh with visual feedback"""
+        self.quick_actions.set_refreshing(True)
+        self.refresh()
+        QTimer.singleShot(500, lambda: self.quick_actions.set_refreshing(False))
     
     def _upload_logs(self):
-        """Open file dialog and start log analysis"""
+        """Upload and analyze log files"""
         files, _ = QFileDialog.getOpenFileNames(
-            self,
-            "Select Log Files",
-            "",
-            "Log Files (*.csv *.json *.evtx);;CSV Files (*.csv);;JSON Files (*.json);;EVTX Files (*.evtx);;All Files (*.*)"
+            self, "Select Log Files", "",
+            "Log Files (*.json *.jsonl *.csv *.log);;JSON (*.json *.jsonl);;CSV (*.csv);;All (*.*)"
         )
         
-        if files:
+        if not files:
+            return
+        
+        # Show progress
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, len(files))
+        self.progress_bar.setValue(0)
+        
+        success_count = 0
+        for i, file_path in enumerate(files):
             try:
-                # Update button to show loading state
-                self.upload_btn.setText("⏳ Processing...")
-                self.upload_btn.setEnabled(False)
-                
-                # Add files and start ingestion
-                for file_path in files:
-                    self.bridge.add_file_source(file_path)
-                
-                # Start ingestion if not already running
-                self.bridge.start_ingestion()
-                
-                # Update status
-                self.status_label.setText(f"Status: Added {len(files)} file(s) for analysis...")
-                
-                # Reset button after a short delay
-                QTimer.singleShot(2000, self._reset_upload_button)
-                
-                # Force refresh to show results
-                QTimer.singleShot(3000, self.refresh)
-                
-            except Exception as e:
-                self.status_label.setText(f"Error: {str(e)[:50]}")
-                self._reset_upload_button()
+                self.bridge.add_file_source(file_path)
+                success_count += 1
+            except Exception:
+                pass
+            self.progress_bar.setValue(i + 1)
+        
+        self.bridge.start_ingestion()
+        
+        # Hide progress after delay
+        QTimer.singleShot(1500, self._hide_progress)
+        QTimer.singleShot(500, self.refresh)
     
-    def _reset_upload_button(self):
-        """Reset upload button to normal state"""
-        self.upload_btn.setText("📁 Upload Logs")
-        self.upload_btn.setEnabled(True)
-
+    def _hide_progress(self):
+        self.progress_bar.setVisible(False)
