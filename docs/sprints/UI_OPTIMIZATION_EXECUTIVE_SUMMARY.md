@@ -337,7 +337,7 @@ scrollbar.setValue(scroll_pos)
 ### Installation
 No changes to installation process:
 ```bash
-python setup.py
+python setup_project.py
 python launch_ui.py
 ```
 

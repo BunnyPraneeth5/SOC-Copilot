@@ -7,7 +7,7 @@ from typing import Optional, Callable, List
 from pathlib import Path
 
 from soc_copilot.pipeline import create_soc_copilot
-from .schemas import AnalysisResult, AlertSummary, PipelineStats
+from .schemas import AnalysisResult, AlertSummary, PipelineStats, LogSummary
 from .result_store import ResultStore
 
 from soc_copilot.core.logging import get_logger
@@ -97,12 +97,45 @@ class AppController:
             pipeline_stats.classification_distribution[cls] = (
                 pipeline_stats.classification_distribution.get(cls, 0) + 1
             )
+            
+        # Build generic log summaries for ALL logs
+        log_summaries = []
+        for i, line in enumerate(raw_lines):
+            cls = "Benign"
+            conf = 1.0
+            risk = "Low"
+            is_alert = False
+            src_ip = None
+            dst_ip = None
+            
+            if i < len(results):
+                r = results[i]
+                cls = r.ensemble_result.classification
+                conf = r.ensemble_result.class_confidence
+                risk = r.ensemble_result.risk_level.value
+                is_alert = r.requires_alert
+                src_ip = r.source_context.get("src_ip")
+                dst_ip = r.source_context.get("dst_ip")
+                
+            log_id = f"LOG-{uuid.uuid4().hex[:8]}"
+            log_summaries.append(LogSummary(
+                log_id=log_id,
+                timestamp=datetime.now(),
+                classification=cls,
+                confidence=conf,
+                risk_level=risk,
+                source_ip=src_ip,
+                destination_ip=dst_ip,
+                raw_log=line,
+                is_alert=is_alert
+            ))
         
         # Create result
         result = AnalysisResult(
             batch_id=str(uuid.uuid4()),
             timestamp=datetime.now(),
             alerts=alert_summaries,
+            logs=log_summaries,
             stats=pipeline_stats,
             raw_count=len(raw_lines)
         )

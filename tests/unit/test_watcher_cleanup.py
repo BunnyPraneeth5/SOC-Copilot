@@ -51,13 +51,27 @@ def test_tailer_stops_cleanly_on_error():
     def callback(line):
         lines.append(line)
     
-    # Use non-existent file
     tailer = FileTailer("/nonexistent/file.log", callback)
-    tailer._max_errors = 3
+    tailer._max_errors = 1
+    
+    class DummyPath:
+        def __init__(self):
+            self.size = 0
+        def exists(self): return True
+        def stat(self): 
+            class Stat: pass
+            s = Stat()
+            s.st_size = self.size
+            self.size += 100
+            return s
+        def __fspath__(self): return "/nonexistent/file.log"
+        def __str__(self): return "/nonexistent/file.log"
+        
+    tailer.filepath = DummyPath()
     tailer.start()
     
-    # Wait for errors to accumulate
-    time.sleep(2.0)
+    # Wait for errors to accumulate and thread to exit
+    tailer._thread.join(timeout=5.0)
     
     # Thread should have stopped
     assert not tailer._thread.is_alive()

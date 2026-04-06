@@ -22,6 +22,20 @@ class AlertSummary:
 
 
 @dataclass
+class LogSummary:
+    """Summary of any processed log (benign or alert)"""
+    log_id: str
+    timestamp: datetime
+    classification: str
+    confidence: float
+    risk_level: str
+    source_ip: Optional[str]
+    destination_ip: Optional[str]
+    raw_log: str
+    is_alert: bool
+
+
+@dataclass
 class PipelineStats:
     """Pipeline statistics view model"""
     total_records: int
@@ -38,5 +52,6 @@ class AnalysisResult:
     batch_id: str
     timestamp: datetime
     alerts: List[AlertSummary]
+    logs: List[LogSummary]
     stats: PipelineStats
     raw_count: int

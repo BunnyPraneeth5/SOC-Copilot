@@ -194,7 +194,7 @@ source venv/bin/activate        # Linux/macOS
 .\venv\Scripts\activate         # Windows
 
 # 3. Run automated setup
-python setup.py
+python setup_project.py
 
 # 4. Verify installation
 python check_requirements.py
@@ -428,7 +428,7 @@ SOC-Copilot/
 ├── logs/                             # Application logs directory
 ├── installer/                        # Installer artifacts
 ├── launch_ui.py                      # UI launcher script
-├── setup.py                          # Automated setup script
+├── setup_project.py                          # Automated setup script
 ├── check_requirements.py             # System requirements checker
 ├── pyproject.toml                    # Project metadata & dependencies
 ├── sample_logs.jsonl                 # Sample log data for testing
@@ -642,7 +642,7 @@ This verifies Python version, required packages, directory structure, model avai
 rm -rf data/models data/logs
 
 # Re-run setup
-python setup.py
+python setup_project.py
 
 # Retrain models
 python scripts/train_models.py

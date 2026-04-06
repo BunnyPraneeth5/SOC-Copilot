@@ -95,7 +95,7 @@ def test_setup_check_permissions_success(temp_project_root, monkeypatch):
     monkeypatch.chdir(temp_project_root)
     
     # Import setup module
-    import setup
+    import setup_project as setup
     
     result = setup.check_permissions()
     assert result is True
@@ -105,7 +105,7 @@ def test_setup_check_permissions_creates_dirs(temp_project_root, monkeypatch):
     """Setup should create required directories"""
     monkeypatch.chdir(temp_project_root)
     
-    import setup
+    import setup_project as setup
     
     setup.check_permissions()
     

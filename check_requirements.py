@@ -318,7 +318,7 @@ def main():
     else:
         print("CRITICAL CHECKS FAILED. Please address the issues above.")
         print("\nFor help:")
-        print("- Run setup: python setup.py")
+        print("- Run setup: python setup_project.py")
         print("- See README.md for troubleshooting")
         return 1
 

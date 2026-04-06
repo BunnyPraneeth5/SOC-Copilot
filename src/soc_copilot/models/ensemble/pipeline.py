@@ -172,9 +172,9 @@ class AnalysisPipeline:
                 source_ip=context.get("src_ip"),
             )
 
-            if not self._deduplicator.should_process(fingerprint):
-                # Terminal state: suppress duplicate benign event
-                return None
+            # We DO NOT return None here anymore because we want
+            # all logs to bubble up for the All Logs View!
+            self._deduplicator.should_process(fingerprint)
 
         return AnalysisResult(
             ensemble_result=ensemble_result,

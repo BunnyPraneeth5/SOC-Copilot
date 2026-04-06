@@ -87,7 +87,7 @@ This document summarizes the production readiness improvements implemented for S
 - `src/soc_copilot/phase4/ui/alerts_view.py`: Improved responsiveness and safety
 
 ### Setup and Installation
-- `setup.py`: Enhanced installation process with better error handling
+- `setup_project.py`: Enhanced installation process with better error handling
 - `launch_ui.py`: Robust launch with graceful degradation
 - `check_requirements.py`: Comprehensive production readiness validation
 
@@ -136,7 +136,7 @@ python check_requirements.py
 ```bash
 pip install PyQt6
 # Or reinstall everything:
-python setup.py
+python setup_project.py
 ```
 
 #### Permission Errors
@@ -153,7 +153,7 @@ python setup.py
 ```bash
 # Complete fresh setup
 rm -rf data/models data/logs
-python setup.py
+python setup_project.py
 python check_requirements.py
 python launch_ui.py
 ```
@@ -201,7 +201,7 @@ python launch_ui.py
 - Check system resource usage
 
 ### Updates
-- Application updates via Git pull + `python setup.py`
+- Application updates via Git pull + `python setup_project.py`
 - Model updates via retraining
 - Configuration updates via YAML file edits
 - No automatic updates (security by design)

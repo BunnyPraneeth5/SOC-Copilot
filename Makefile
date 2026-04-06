@@ -14,7 +14,7 @@ help: ## Show this help message
 # ---- Setup & Installation ----
 
 setup: ## Run the full automated setup
-	python setup.py
+	python setup_project.py
 
 install: ## Install production dependencies
 	pip install -r requirements.txt

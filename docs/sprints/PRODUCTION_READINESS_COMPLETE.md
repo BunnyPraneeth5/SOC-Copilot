@@ -36,7 +36,7 @@ Successfully improved SOC Copilot's production readiness by implementing robust 
 ### 3. Fresh Machine Setup
 
 **Files Created:**
-- `setup.py` - Automated setup script for fresh installations
+- `setup_project.py` - Automated setup script for fresh installations
 - `check_requirements.py` - Comprehensive system requirements verification
 
 **Files Modified:**
@@ -84,7 +84,7 @@ git clone <repository-url>
 cd "SOC Copilot"
 
 # Run setup
-python setup.py
+python setup_project.py
 
 # Verify installation
 python check_requirements.py
@@ -122,7 +122,7 @@ The application now supports:
 ## Files Added/Modified
 
 ### New Files
-- `setup.py` - Installation automation
+- `setup_project.py` - Installation automation
 - `check_requirements.py` - System verification
 - `verify_improvements.py` - Integration testing
 - `tests/unit/test_ingestion_robustness.py` - Robustness tests

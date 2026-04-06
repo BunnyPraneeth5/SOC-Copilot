@@ -91,7 +91,7 @@ def main():
         # Check required permissions
         if not check_required_permissions(project_root):
             print("\nCannot start: Required permissions missing.")
-            print("Run 'python setup.py' to fix permissions.")
+            print("Run 'python setup_project.py' to fix permissions.")
             sys.exit(1)
         
         # Check optional permissions (non-blocking)
@@ -111,7 +111,7 @@ def main():
             print(f"Details: {e}")
             print("\nInstallation steps:")
             print("1. pip install PyQt6")
-            print("2. Or run: python setup.py")
+            print("2. Or run: python setup_project.py")
             sys.exit(1)
         
         # Import SOC Copilot modules
@@ -123,7 +123,7 @@ def main():
             print("Error: SOC Copilot modules not found.")
             print(f"Details: {e}")
             print("\nTry:")
-            print("1. python setup.py")
+            print("1. python setup_project.py")
             print("2. pip install -e .")
             sys.exit(1)
         
@@ -238,7 +238,7 @@ def main():
         print(f"Unexpected error launching SOC Copilot: {e}")
         print("\nTroubleshooting steps:")
         print("1. Check installation: python check_requirements.py")
-        print("2. Reinstall: python setup.py")
+        print("2. Reinstall: python setup_project.py")
         print("3. Check logs in logs/ directory")
         sys.exit(1)
     finally:

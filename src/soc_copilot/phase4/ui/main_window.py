@@ -24,6 +24,7 @@ from .controller_bridge import ControllerBridge
 from .config_panel import ConfigPanel
 from .about_dialog import AboutDialog
 from .system_status_bar import SystemStatusBar, PermissionBanner, KillSwitchBanner
+from .all_logs_view import AllLogsView
 
 
 class NavButton(QPushButton):
@@ -175,7 +176,8 @@ class Sidebar(QFrame):
             ("🚨", "Alerts", 1),
             ("🔍", "Investigation", 2),
             ("🤖", "Assistant", 3),
-            ("⚙️", "Settings", 4),
+            ("📋", "All Logs", 4),
+            ("⚙️", "Settings", 5),
         ]
         
         for icon, text, idx in nav_items:
@@ -379,7 +381,7 @@ class MainWindow(QMainWindow):
         self.dashboard = Dashboard(self.bridge)
         self.dashboard.navigate_to_alerts.connect(lambda: self._on_nav_changed(1))
         self.dashboard.navigate_to_alerts_filtered.connect(self._on_navigate_alerts_filtered)
-        self.dashboard.navigate_to_settings.connect(lambda: self._on_nav_changed(4))
+        self.dashboard.navigate_to_settings.connect(lambda: self._on_nav_changed(5))
         self.dashboard.alert_selected.connect(self._on_alert_selected)
         self.page_stack.addWidget(self.dashboard)
         
@@ -397,7 +399,11 @@ class MainWindow(QMainWindow):
         self.assistant_panel = AssistantPanel()
         self.page_stack.addWidget(self.assistant_panel)
         
-        # Page 4: Settings
+        # Page 4: All Logs
+        self.all_logs_view = AllLogsView(self.bridge)
+        self.page_stack.addWidget(self.all_logs_view)
+        
+        # Page 5: Settings
         self.config_panel = ConfigPanel(self.bridge)
         self.page_stack.addWidget(self.config_panel)
         
@@ -429,7 +435,8 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+2"), self).activated.connect(lambda: self._on_nav_changed(1))
         QShortcut(QKeySequence("Ctrl+3"), self).activated.connect(lambda: self._on_nav_changed(2))
         QShortcut(QKeySequence("Ctrl+4"), self).activated.connect(lambda: self._on_nav_changed(3))
-        QShortcut(QKeySequence("Ctrl+,"), self).activated.connect(lambda: self._on_nav_changed(4))
+        QShortcut(QKeySequence("Ctrl+5"), self).activated.connect(lambda: self._on_nav_changed(4))
+        QShortcut(QKeySequence("Ctrl+,"), self).activated.connect(lambda: self._on_nav_changed(5))
         
         # Refresh shortcut
         QShortcut(QKeySequence("F5"), self).activated.connect(self._refresh_current_view)
@@ -444,6 +451,8 @@ class MainWindow(QMainWindow):
             self.dashboard.refresh()
         elif current_index == 1:
             self.alerts_view.refresh()
+        elif current_index == 4:
+            self.all_logs_view.refresh()
         self.status_bar.showMessage("View refreshed", 1000)
     
     def _on_nav_changed(self, index: int):
@@ -553,9 +562,14 @@ class MainWindow(QMainWindow):
         nav_alerts.triggered.connect(lambda: self._on_nav_changed(1))
         file_menu.addAction(nav_alerts)
         
+        nav_logs = QAction("📋 All Logs", self)
+        nav_logs.setShortcut("Ctrl+5")
+        nav_logs.triggered.connect(lambda: self._on_nav_changed(4))
+        file_menu.addAction(nav_logs)
+        
         nav_settings = QAction("⚙️ Settings", self)
         nav_settings.setShortcut("Ctrl+,")
-        nav_settings.triggered.connect(lambda: self._on_nav_changed(4))
+        nav_settings.triggered.connect(lambda: self._on_nav_changed(5))
         file_menu.addAction(nav_settings)
         
         file_menu.addSeparator()
