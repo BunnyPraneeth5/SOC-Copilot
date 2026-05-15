@@ -215,7 +215,7 @@ class AnalysisPipeline:
     def get_statistics(self, results: list[AnalysisResult]) -> dict[str, Any]:
         """Generate statistics from results."""
         if not results:
-            return {}
+            return {"deduplication": self._deduplicator.get_stats()}
 
         anomaly_scores = [r.ensemble_result.anomaly_score for r in results]
         risk_scores = [r.ensemble_result.combined_risk_score for r in results]
@@ -238,7 +238,12 @@ class AnalysisPipeline:
             "risk_score_std": float(np.std(risk_scores)),
             "classification_distribution": dict(classifications),
             "risk_level_distribution": dict(risk_levels),
+            "deduplication": self._deduplicator.get_stats(),
         }
+
+    def get_deduplication_stats(self) -> dict[str, Any]:
+        """Expose benign-noise deduplication counters."""
+        return self._deduplicator.get_stats()
 
 
 def create_analysis_pipeline(models_dir: str = "data/models") -> AnalysisPipeline:

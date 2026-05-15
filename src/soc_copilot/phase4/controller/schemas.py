@@ -52,6 +52,13 @@ class AnalysisResult:
     batch_id: str
     timestamp: datetime
     alerts: List[AlertSummary]
-    logs: List[LogSummary]
-    stats: PipelineStats
-    raw_count: int
+    logs: List[LogSummary] = field(default_factory=list)
+    stats: PipelineStats = field(default_factory=lambda: PipelineStats(
+        total_records=0,
+        processed_records=0,
+        alerts_generated=0,
+        risk_distribution={},
+        classification_distribution={},
+        processing_time=0.0,
+    ))
+    raw_count: int = 0

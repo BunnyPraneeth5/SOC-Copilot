@@ -321,6 +321,9 @@ class Dashboard(QWidget):
         shutdown = stats.get("shutdown_flag", False)
         sources = stats.get("sources_count", 0)
         dropped = stats.get("dropped_count", 0)
+        dedup = stats.get("deduplication", {})
+        suppressed = dedup.get("suppressed_count", 0)
+        security = stats.get("security", {})
         
         if not pipeline_loaded:
             self._status_text = "Inactive"
@@ -332,6 +335,12 @@ class Dashboard(QWidget):
             status_parts = ["Active"]
             if dropped > 0:
                 status_parts.append(f"Dropped: {dropped}")
+            if suppressed > 0:
+                status_parts.append(f"Suppressed: {suppressed}")
+            if security.get("strict_model_integrity"):
+                status_parts.append("Strict integrity")
+            if security.get("online_enrichment_enabled"):
+                status_parts.append("Online enrichment")
             self._status_text = " • ".join(status_parts)
             self._empty_state_text = ""
         elif sources > 0:
@@ -390,7 +399,7 @@ class Dashboard(QWidget):
         
         files, _ = QFileDialog.getOpenFileNames(
             self, "Select Log Files", "",
-            "Log Files (*.json *.jsonl *.csv *.log);;JSON (*.json *.jsonl);;CSV (*.csv);;All (*.*)"
+            "Log Files (*.json *.jsonl *.csv *.tsv *.log *.syslog *.txt *.evtx);;JSON (*.json *.jsonl);;CSV/TSV (*.csv *.tsv);;Text Logs (*.log *.syslog *.txt);;Windows EVTX (*.evtx);;All (*.*)"
         )
         
         if not files:

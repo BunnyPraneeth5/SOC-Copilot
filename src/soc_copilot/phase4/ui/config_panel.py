@@ -276,6 +276,18 @@ class ConfigPanel(QWidget):
         # Ingestion Status
         self.ingestion_indicator = StatusIndicator("Ingestion", "Not Started", "#666666")
         status_layout.addWidget(self.ingestion_indicator, 2, 0)
+
+        # Model Integrity
+        self.integrity_indicator = StatusIndicator("Model Integrity", "Unknown", "#888888")
+        status_layout.addWidget(self.integrity_indicator, 2, 1)
+
+        # Online Enrichment
+        self.online_indicator = StatusIndicator("Online Enrichment", "Disabled", "#4CAF50")
+        status_layout.addWidget(self.online_indicator, 3, 0)
+
+        # Noise Suppression
+        self.noise_indicator = StatusIndicator("Noise Suppression", "0 suppressed", "#2196F3")
+        status_layout.addWidget(self.noise_indicator, 3, 1)
         
         status_group.setLayout(status_layout)
         layout.addWidget(status_group)
@@ -346,11 +358,39 @@ class ConfigPanel(QWidget):
                 ingestion_state = get_ingestion_state(running, sources, shutdown)
                 ingestion_cfg = INGESTION_STATES[ingestion_state]
                 self.ingestion_indicator.update_status(ingestion_cfg.label, ingestion_cfg.color)
+
+                security = stats.get("security", {})
+                integrity = security.get("model_integrity", {})
+                strict = security.get("strict_model_integrity", False)
+                online = security.get("online_enrichment_enabled", False)
+                dedup = stats.get("deduplication", {})
+
+                if integrity.get("is_valid") is False:
+                    self.integrity_indicator.update_status("Failed", "#f44336")
+                elif strict:
+                    verified = len(integrity.get("verified_files", []))
+                    self.integrity_indicator.update_status(f"Strict ({verified} verified)", "#4CAF50")
+                else:
+                    self.integrity_indicator.update_status("Dev Mode", "#2196F3")
+
+                if online:
+                    self.online_indicator.update_status("Enabled", "#FFC107")
+                else:
+                    self.online_indicator.update_status("Disabled", "#4CAF50")
+
+                suppressed = dedup.get("suppressed_count", 0)
+                self.noise_indicator.update_status(f"{suppressed} suppressed", "#2196F3")
             except Exception:
                 self.ingestion_indicator.update_status("Unknown", "#888888")
+                self.integrity_indicator.update_status("Unknown", "#888888")
+                self.online_indicator.update_status("Unknown", "#888888")
+                self.noise_indicator.update_status("Unknown", "#888888")
         else:
             not_started_cfg = INGESTION_STATES["not_started"]
             self.ingestion_indicator.update_status(not_started_cfg.label, not_started_cfg.color)
+            self.integrity_indicator.update_status("Unknown", "#888888")
+            self.online_indicator.update_status("Disabled", "#4CAF50")
+            self.noise_indicator.update_status("0 suppressed", "#2196F3")
     
     def refresh(self):
         """Public method to refresh status (called by timer)"""

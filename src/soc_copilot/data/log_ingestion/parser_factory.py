@@ -10,6 +10,7 @@ from soc_copilot.data.log_ingestion.parsers.json_parser import JSONParser
 from soc_copilot.data.log_ingestion.parsers.csv_parser import CSVParser
 from soc_copilot.data.log_ingestion.parsers.syslog_parser import SyslogParser
 from soc_copilot.data.log_ingestion.parsers.evtx_parser import EVTXParser
+from soc_copilot.security.input_validator import validate_log_file, validate_path
 
 
 class ParserFactory:
@@ -133,6 +134,7 @@ class ParserFactory:
         self,
         filepath: str | Path,
         format_hint: str | None = None,
+        validate_input: bool = True,
     ) -> list[ParsedRecord]:
         """Parse a log file using the appropriate parser.
         
@@ -147,7 +149,13 @@ class ParserFactory:
             ParseError: If parsing fails
             ValueError: If format cannot be detected
         """
-        filepath = Path(filepath)
+        if validate_input:
+            validation = validate_log_file(filepath, must_exist=True)
+            if not validation.is_valid:
+                raise ValueError(validation.error)
+            filepath = validation.sanitized_path or Path(filepath)
+        else:
+            filepath = Path(filepath)
         
         if not filepath.exists():
             raise FileNotFoundError(f"Log file not found: {filepath}")
@@ -182,6 +190,7 @@ class ParserFactory:
         directory: str | Path,
         recursive: bool = True,
         format_hint: str | None = None,
+        validate_input: bool = True,
     ) -> dict[str, list[ParsedRecord]]:
         """Parse all log files in a directory.
         
@@ -193,7 +202,13 @@ class ParserFactory:
         Returns:
             Dict mapping filepath to parsed records
         """
-        directory = Path(directory)
+        if validate_input:
+            validation = validate_path(directory, must_exist=True)
+            if not validation.is_valid:
+                raise ValueError(validation.error)
+            directory = validation.sanitized_path or Path(directory)
+        else:
+            directory = Path(directory)
         
         if not directory.is_dir():
             raise ValueError(f"Not a directory: {directory}")
@@ -206,7 +221,7 @@ class ParserFactory:
         for ext in self.get_supported_extensions():
             for filepath in directory.glob(f"{pattern}{ext}"):
                 try:
-                    records = self.parse(filepath, format_hint)
+                    records = self.parse(filepath, format_hint, validate_input=validate_input)
                     results[str(filepath)] = records
                 except Exception as e:
                     # Store empty list with error info
@@ -234,6 +249,7 @@ def get_parser_factory() -> ParserFactory:
 def parse_log_file(
     filepath: str | Path,
     format_hint: str | None = None,
+    validate_input: bool = True,
 ) -> list[ParsedRecord]:
     """Convenience function to parse a log file.
     
@@ -244,13 +260,14 @@ def parse_log_file(
     Returns:
         List of parsed records
     """
-    return get_parser_factory().parse(filepath, format_hint)
+    return get_parser_factory().parse(filepath, format_hint, validate_input=validate_input)
 
 
 def parse_log_directory(
     dirpath: str | Path,
     recursive: bool = True,
     format_hint: str | None = None,
+    validate_input: bool = True,
 ) -> list[ParsedRecord]:
     """Convenience function to parse all log files in a directory.
     
@@ -262,7 +279,9 @@ def parse_log_directory(
     Returns:
         List of all parsed records from all files
     """
-    results = get_parser_factory().parse_directory(dirpath, recursive, format_hint)
+    results = get_parser_factory().parse_directory(
+        dirpath, recursive, format_hint, validate_input=validate_input
+    )
     all_records = []
     for records in results.values():
         all_records.extend(records)

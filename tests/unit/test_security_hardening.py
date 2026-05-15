@@ -101,7 +101,7 @@ class TestLogFileValidation:
     def test_valid_log_extension(self, tmp_path):
         from soc_copilot.security.input_validator import validate_log_file
         
-        for ext in [".log", ".jsonl", ".json", ".evtx", ".csv", ".txt"]:
+        for ext in [".log", ".syslog", ".jsonl", ".json", ".evtx", ".csv", ".tsv", ".txt"]:
             test_file = tmp_path / f"test{ext}"
             test_file.write_text("test content")
             
@@ -117,6 +117,12 @@ class TestLogFileValidation:
             
             result = validate_log_file(str(test_file))
             assert result.is_valid is False, f"Extension {ext} should be rejected"
+
+    def test_must_exist_rejected_for_missing_log(self, tmp_path):
+        from soc_copilot.security.input_validator import validate_log_file
+
+        result = validate_log_file(str(tmp_path / "missing.log"), must_exist=True)
+        assert result.is_valid is False
 
 
 # =========================================================================
@@ -296,3 +302,57 @@ class TestModelIntegrity:
         result = verify_models(tmp_path)
         assert result.is_valid is True
         assert "skipped" in (result.error or "").lower()
+
+    def test_verify_models_no_manifest_fails_in_strict_mode(self, tmp_path):
+        from soc_copilot.security.model_integrity import verify_models
+
+        result = verify_models(tmp_path, strict=True)
+        assert result.is_valid is False
+        assert "strict" in (result.error or "").lower()
+
+    def test_verify_model_file_detects_single_file_tampering(self, tmp_path):
+        from soc_copilot.security.model_integrity import save_manifest, verify_model_file
+
+        model_file = tmp_path / "text_log_rf_v1.joblib"
+        model_file.write_bytes(b"trusted model")
+        save_manifest(tmp_path, {"text_log_rf_v1.joblib": "bad-hash"})
+
+        result = verify_model_file(model_file)
+        assert result.is_valid is False
+        assert "text_log_rf_v1.joblib" in result.failed_files
+
+    def test_verify_model_file_missing_manifest_dev_vs_strict(self, tmp_path):
+        from soc_copilot.security.model_integrity import verify_model_file
+
+        model_file = tmp_path / "text_log_rf_v1.joblib"
+        model_file.write_bytes(b"model")
+
+        assert verify_model_file(model_file, strict=False).is_valid is True
+        assert verify_model_file(model_file, strict=True).is_valid is False
+
+
+class TestNetworkHelpers:
+    """Test shared network policy helpers."""
+
+    def test_external_ip_public_ipv4(self):
+        from soc_copilot.security.network import is_external_ip
+
+        assert is_external_ip("8.8.8.8") is True
+
+    def test_external_ip_private_ranges(self):
+        from soc_copilot.security.network import is_external_ip
+
+        for ip in ["10.1.2.3", "172.16.0.1", "172.31.255.255", "192.168.1.10"]:
+            assert is_external_ip(ip) is False
+
+    def test_external_ip_reserved_loopback_invalid(self):
+        from soc_copilot.security.network import is_external_ip
+
+        for ip in ["127.0.0.1", "169.254.1.1", "224.0.0.1", "198.51.100.42", "", "nope"]:
+            assert is_external_ip(ip) is False
+
+    def test_external_ip_ipv6(self):
+        from soc_copilot.security.network import is_external_ip
+
+        assert is_external_ip("2001:4860:4860::8888") is True
+        assert is_external_ip("::1") is False

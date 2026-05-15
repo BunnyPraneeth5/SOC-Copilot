@@ -40,7 +40,7 @@ class ConfigManager:
         try:
             with open(self._ingestion_config_path, 'r', encoding='utf-8') as f:
                 config = yaml.safe_load(f)
-                return config if config else {}
+                return config if isinstance(config, dict) else {}
         except (yaml.YAMLError, OSError):
             return {}
     

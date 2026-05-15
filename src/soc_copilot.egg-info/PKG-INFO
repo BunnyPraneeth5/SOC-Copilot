@@ -41,7 +41,7 @@ Dynamic: license-file
 
 **An AI-Powered Security Operations Center Assistant for Automated Threat Detection and Intelligent Incident Response**
 
-SOC Copilot is a fully offline, desktop-based security analysis platform that combines hybrid Machine Learning (Isolation Forest + Random Forest) with rule-based detection to provide real-time threat monitoring, intelligent alert generation, and explainable incident analysis — all running locally on your machine with zero cloud dependency.
+SOC Copilot is an offline-first, desktop-based security analysis platform that combines hybrid Machine Learning (Isolation Forest + Random Forest) with rule-based detection to provide real-time threat monitoring, intelligent alert generation, and explainable incident analysis. The core detection pipeline runs locally with zero cloud dependency. Optional threat-intelligence enrichment agents can call external services only when explicitly enabled.
 
 ---
 
@@ -78,6 +78,7 @@ SOC Copilot is a fully offline, desktop-based security analysis platform that co
 | **AI-Powered Explanations** | Every alert includes human-readable reasoning, risk scoring, and actionable suggested responses |
 | **Alert Deduplication** | Intelligent grouping of related alerts within configurable time windows to reduce analyst fatigue |
 | **Fully Offline** | All inference, processing, and UI run entirely on-premise — no internet connection required |
+| **Optional Online Enrichment** | AbuseIPDB, VirusTotal, Shodan, WHOIS, and geo-IP lookups are disabled by default and require explicit opt-in |
 | **Kill Switch** | Emergency stop mechanism to instantly halt all processing |
 | **Modular & Extensible** | Plugin-ready architecture designed for adding new ML models (Autoencoder, Transformer, etc.) |
 | **Cross-Platform** | Runs on Windows, macOS, and Linux |
@@ -529,6 +530,20 @@ random_forest:
   random_state: 42
 ```
 
+### Production Security Flags
+
+SOC Copilot defaults to developer-friendly local operation. For production releases, enable stricter runtime checks:
+
+```bash
+# Fail model loading if model_hashes.json is missing, incomplete, or invalid
+SOC_COPILOT_STRICT_MODEL_INTEGRITY=true
+
+# Keep false/unset for offline operation. Set true only after approving external lookups.
+SOC_COPILOT_ENABLE_ONLINE_ENRICHMENT=false
+```
+
+Production model bundles should include `data/models/model_hashes.json` generated from trusted model artifacts.
+
 ---
 
 ## 🎯 Detection Capabilities
@@ -716,6 +731,13 @@ The executable will be generated in the `dist/` directory.
 - Deploy in an **air-gapped / isolated network** — no internet access required
 - Apply regular security updates to the host OS
 - Rotate log files according to your organization's retention policy
+- Enable strict model integrity for release builds
+- Keep online enrichment disabled unless data-sharing with external providers is approved
+
+### Limitations
+- The text-log classifier can be trained from synthetic data for demos; production deployments should validate or retrain with representative SOC logs.
+- Alert thresholds need environment-specific tuning to balance false positives and missed detections.
+- Raw logs may contain sensitive usernames, IPs, hostnames, and file paths; define retention and access-control policy before production use.
 
 ### Monitoring
 - Application logs are stored in `logs/`

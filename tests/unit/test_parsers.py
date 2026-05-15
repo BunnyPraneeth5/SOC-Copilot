@@ -19,6 +19,7 @@ from soc_copilot.data.log_ingestion.parsers.syslog_parser import (
     parse_rfc3164_timestamp,
 )
 from soc_copilot.core.base import ParseError
+from soc_copilot.data.log_ingestion.parser_factory import parse_log_file
 
 
 # =============================================================================
@@ -303,3 +304,26 @@ class TestSyslogParser:
         path.write_text("<13>Jan  7 10:00:00 host prog: msg1\n<13>Jan  7 10:00:01 host prog: msg2")
         records = parser.parse(path)
         assert len(records) == 2
+
+
+class TestParserFactoryValidation:
+    """Tests for validation wired into the public parser entry point."""
+
+    def test_parse_log_file_rejects_unsafe_extension(self, tmp_path):
+        path = tmp_path / "bad.exe"
+        path.write_text("not a log")
+
+        with pytest.raises(ValueError, match="Unsafe file extension"):
+            parse_log_file(path)
+
+    def test_parse_log_file_rejects_missing_file(self, tmp_path):
+        with pytest.raises(ValueError, match="does not exist"):
+            parse_log_file(tmp_path / "missing.log")
+
+    def test_parse_log_file_allows_tsv(self, tmp_path):
+        path = tmp_path / "events.tsv"
+        path.write_text("name\tvalue\nalice\t1")
+
+        records = parse_log_file(path)
+        assert len(records) == 1
+        assert records[0].raw["name"] == "alice"

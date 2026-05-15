@@ -513,14 +513,40 @@ class MainWindow(QMainWindow):
             parts.append(f"📊 {results} results")
             
             # Ingestion
+            running = stats.get("running", False)
             sources = stats.get("sources_count", 0)
+            shutdown = stats.get("shutdown_flag", False)
+            dropped = stats.get("dropped_count", 0)
+            permission_check = stats.get("permission_check", {})
+            has_permission = permission_check.get("has_permission", True)
+            if shutdown:
+                parts.append("Stopped")
+            elif running and sources > 0:
+                parts.append("Active")
+            elif sources > 0:
+                parts.append("Configured")
+            else:
+                parts.append("Not Started")
             if sources > 0:
                 parts.append(f"📁 {sources} sources")
-            
+            if dropped > 0:
+                parts.append(f"Dropped: {dropped}")
+            if not has_permission:
+                parts.append("Permissions: Limited")
+
             # Kill switch warning
-            if stats.get("shutdown_flag"):
+            if shutdown:
                 parts.append("🛑 KILL SWITCH ACTIVE")
             
+            security = stats.get("security", {})
+            if security.get("strict_model_integrity"):
+                parts.append("Integrity strict")
+            if not security.get("online_enrichment_enabled", False):
+                parts.append("Offline TI")
+            suppressed = stats.get("deduplication", {}).get("suppressed_count", 0)
+            if suppressed:
+                parts.append(f"{suppressed} suppressed")
+
             self.status_bar.showMessage(" │ ".join(parts))
             
         except Exception:

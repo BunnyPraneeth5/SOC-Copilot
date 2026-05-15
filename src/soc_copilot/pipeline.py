@@ -115,6 +115,7 @@ class SOCCopilot:
 
         self._loaded = False
         self._feature_order: list[str] = []
+        self._integrity_status: dict[str, Any] = {}
 
     # ------------------------------------------------------------------
 
@@ -134,6 +135,13 @@ class SOCCopilot:
         try:
             from soc_copilot.security.model_integrity import verify_models
             integrity = verify_models(self.config.models_dir)
+            self._integrity_status = {
+                "is_valid": integrity.is_valid,
+                "verified_files": list(integrity.verified_files),
+                "failed_files": list(integrity.failed_files),
+                "missing_files": list(integrity.missing_files),
+                "error": integrity.error,
+            }
             if not integrity.is_valid and integrity.error and "skipped" not in integrity.error:
                 logger.error(
                     "model_integrity_failed",
@@ -155,6 +163,12 @@ class SOCCopilot:
             "soc_copilot_loaded",
             feature_count=len(self._feature_order),
         )
+
+    def get_security_status(self) -> dict[str, Any]:
+        """Return model-security status captured during pipeline load."""
+        return {
+            "model_integrity": dict(self._integrity_status),
+        }
 
     # ------------------------------------------------------------------
 

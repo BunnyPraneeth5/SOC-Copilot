@@ -71,6 +71,20 @@ def test_cleanup():
     assert len(dedup._seen) == 0
 
 
+def test_deduplication_stats_report_suppressed_noise():
+    """Stats should expose processed and suppressed duplicate counts."""
+    dedup = EventDeduplicator(cooldown_seconds=60.0)
+    fp1 = dedup.fingerprint_event("Benign", 0.1, "192.168.1.1")
+
+    assert dedup.should_process(fp1) is True
+    assert dedup.should_process(fp1) is False
+
+    stats = dedup.get_stats()
+    assert stats["processed_count"] == 1
+    assert stats["suppressed_count"] == 1
+    assert stats["tracked_fingerprints"] == 1
+
+
 if __name__ == "__main__":
     test_deduplication_basic()
     test_fingerprint_stability()

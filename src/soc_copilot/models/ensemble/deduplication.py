@@ -32,6 +32,8 @@ class EventDeduplicator:
         """
         self.cooldown_seconds = cooldown_seconds
         self._seen: Dict[str, float] = {}  # fingerprint -> last_seen_timestamp
+        self._processed_count = 0
+        self._suppressed_count = 0
 
     def should_process(self, fingerprint: str) -> bool:
         """
@@ -47,14 +49,17 @@ class EventDeduplicator:
         if last_seen is None:
             # First time seeing this event
             self._seen[fingerprint] = now
+            self._processed_count += 1
             return True
 
         if (now - last_seen) >= self.cooldown_seconds:
             # Cooldown expired
             self._seen[fingerprint] = now
+            self._processed_count += 1
             return True
 
         # Suppress duplicate benign event
+        self._suppressed_count += 1
         return False
 
     def fingerprint_event(
@@ -101,4 +106,13 @@ class EventDeduplicator:
             fp: ts
             for fp, ts in self._seen.items()
             if (now - ts) < max_age_seconds
+        }
+
+    def get_stats(self) -> dict:
+        """Return deduplication counters for analyst-visible noise reporting."""
+        return {
+            "tracked_fingerprints": len(self._seen),
+            "processed_count": self._processed_count,
+            "suppressed_count": self._suppressed_count,
+            "cooldown_seconds": self.cooldown_seconds,
         }

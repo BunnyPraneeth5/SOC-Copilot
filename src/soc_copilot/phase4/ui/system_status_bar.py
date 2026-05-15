@@ -124,7 +124,7 @@ class SystemStatusBar(QFrame):
                 border-bottom: 1px solid #1a2744;
             }
         """)
-        self.setFixedHeight(40)
+        self.setFixedHeight(44)
         
         layout = QHBoxLayout()
         layout.setContentsMargins(15, 0, 15, 0)
@@ -147,6 +147,13 @@ class SystemStatusBar(QFrame):
         # Governance indicator (combines old Kill Switch + Admin + Permissions LEDs)
         self.governance_led = StatusIndicator("Governance")
         layout.addWidget(self.governance_led)
+
+        # Separator
+        layout.addWidget(self._separator())
+
+        # Security indicator (model integrity + online enrichment)
+        self.security_led = StatusIndicator("Security")
+        layout.addWidget(self.security_led)
         
         layout.addStretch()
         
@@ -195,10 +202,16 @@ class SystemStatusBar(QFrame):
             pipeline_details = []
             
             if pipeline_loaded:
-                self.pipeline_led.set_state("green", "Active", [
+                pipeline_details = [
                     "ML models loaded",
-                    "Ready for analysis"
-                ])
+                    "Ready for analysis",
+                ]
+                text_model = stats.get("security", {}).get("text_log_model", {})
+                if text_model.get("loaded"):
+                    pipeline_details.append("Text log model loaded")
+                else:
+                    pipeline_details.append("Text log model fallback: rules")
+                self.pipeline_led.set_state("green", "Active", pipeline_details)
             else:
                 self.pipeline_led.set_state("yellow", "Loading", [
                     "ML models initializing",
@@ -221,6 +234,10 @@ class SystemStatusBar(QFrame):
             
             if dropped > 0:
                 ingestion_details.append(f"⚠️ Dropped: {dropped}")
+            dedup = stats.get("deduplication", {})
+            suppressed = dedup.get("suppressed_count", 0)
+            if suppressed:
+                ingestion_details.append(f"Suppressed benign duplicates: {suppressed}")
             
             if running and sources > 0:
                 if dropped > 0 or buffer_size > max_size * 0.8:
@@ -257,6 +274,32 @@ class SystemStatusBar(QFrame):
                 governance_details.append("Kill Switch: OFF")
                 governance_details.append("Full system access")
                 self.governance_led.set_state("green", "Active", governance_details)
+
+            # Security status
+            security = stats.get("security", {})
+            integrity = security.get("model_integrity", {})
+            strict = security.get("strict_model_integrity", False)
+            online = security.get("online_enrichment_enabled", False)
+
+            security_details = [
+                f"Strict integrity: {'ON' if strict else 'OFF'}",
+                f"Online enrichment: {'ON' if online else 'OFF'}",
+            ]
+            if integrity.get("verified_files"):
+                security_details.append(
+                    f"Verified model files: {len(integrity.get('verified_files', []))}"
+                )
+            if integrity.get("error"):
+                security_details.append(str(integrity.get("error")))
+
+            if integrity.get("is_valid") is False:
+                self.security_led.set_state("red", "Check Failed", security_details)
+            elif strict and not online:
+                self.security_led.set_state("green", "Hardened", security_details)
+            elif online:
+                self.security_led.set_state("yellow", "Online TI", security_details)
+            else:
+                self.security_led.set_state("blue", "Dev Mode", security_details)
             
             # ─────────────────────────────────────────────────────────
             # RESULTS COUNT
@@ -272,6 +315,8 @@ class SystemStatusBar(QFrame):
             
         except Exception as e:
             self.pipeline_led.set_state("red", "Error")
+            if hasattr(self, "security_led"):
+                self.security_led.set_state("gray", "Unknown")
             self.update_time.setText(f"Error: {str(e)[:15]}")
 
 

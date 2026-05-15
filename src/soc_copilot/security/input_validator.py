@@ -20,7 +20,7 @@ from dataclasses import dataclass
 
 # Allowed file extensions for log ingestion
 ALLOWED_LOG_EXTENSIONS = frozenset({
-    ".log", ".jsonl", ".json", ".evtx", ".csv", ".txt",
+    ".log", ".syslog", ".jsonl", ".json", ".evtx", ".csv", ".tsv", ".txt",
 })
 
 # Allowed file extensions for model loading
@@ -101,9 +101,9 @@ def validate_path(
         for base_dir in allowed_base_dirs:
             try:
                 resolved_base = base_dir.resolve()
-                if str(resolved).startswith(str(resolved_base)):
-                    in_allowed = True
-                    break
+                resolved.relative_to(resolved_base)
+                in_allowed = True
+                break
             except (OSError, ValueError):
                 continue
         
@@ -126,6 +126,7 @@ def validate_path(
 def validate_log_file(
     path: str | Path,
     allowed_base_dirs: Optional[list[Path]] = None,
+    must_exist: bool = False,
 ) -> ValidationResult:
     """Validate a log file path for safe ingestion.
     
@@ -142,7 +143,7 @@ def validate_log_file(
         ValidationResult
     """
     # Base path validation
-    result = validate_path(path, allowed_base_dirs=allowed_base_dirs)
+    result = validate_path(path, allowed_base_dirs=allowed_base_dirs, must_exist=must_exist)
     if not result.is_valid:
         return result
     

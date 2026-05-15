@@ -112,7 +112,8 @@ All configs use YAML and live in `config/`:
 
 ## Security Architecture
 
-- **Fully offline** — Zero network calls, no cloud dependencies
+- **Offline core** — Detection, inference, UI, governance, and storage run locally with no cloud dependency
+- **Optional online enrichment** — External reputation/recon lookups are blocked unless `SOC_COPILOT_ENABLE_ONLINE_ENRICHMENT=true`
 - **Permission-aware** — Checks OS permissions before accessing system logs
 - **Kill switch** — Emergency stop mechanism via file-based flag
 - **Governance layer** — Phase 3 governance controls and audit logging

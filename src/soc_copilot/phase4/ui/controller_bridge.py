@@ -5,6 +5,7 @@ from pathlib import Path
 from datetime import datetime
 import threading
 from ..controller import AppController, AnalysisResult
+from soc_copilot.security.input_validator import validate_log_file
 
 
 class ControllerBridge:
@@ -55,13 +56,14 @@ class ControllerBridge:
         enhanced_stats = {
             **base_stats,
             "permission_check": self._permission_status,
-            "shutdown_flag": False,  # Default, updated if kill switch is checked
+            "shutdown_flag": base_stats.get("shutdown_flag", False),
         }
         
         # Check kill switch if available
-        if hasattr(self._controller, 'killswitch_check') and self._controller.killswitch_check:
+        killswitch_check = getattr(self._controller, "__dict__", {}).get("killswitch_check")
+        if callable(killswitch_check):
             try:
-                enhanced_stats["shutdown_flag"] = self._controller.killswitch_check()
+                enhanced_stats["shutdown_flag"] = bool(killswitch_check())
             except Exception:
                 pass
         
@@ -72,9 +74,10 @@ class ControllerBridge:
         is_active = False
         reason = "Normal operation"
         
-        if hasattr(self._controller, 'killswitch_check') and self._controller.killswitch_check:
+        killswitch_check = getattr(self._controller, "__dict__", {}).get("killswitch_check")
+        if callable(killswitch_check):
             try:
-                is_active = self._controller.killswitch_check()
+                is_active = bool(killswitch_check())
                 if is_active:
                     reason = "Kill switch engaged - processing halted"
             except Exception as e:
@@ -97,9 +100,10 @@ class ControllerBridge:
     def add_file_source(self, filepath: str) -> bool:
         """Add a file for analysis. Process immediately (thread-safe)."""
         try:
-            path = Path(filepath)
-            if not path.exists():
+            validation = validate_log_file(filepath, must_exist=True)
+            if not validation.is_valid:
                 return False
+            path = validation.sanitized_path or Path(filepath)
             
             # Read and parse file content
             records = self._parse_file(path)
@@ -117,10 +121,12 @@ class ControllerBridge:
         records = []
         suffix = path.suffix.lower()
         
-        if suffix == '.csv':
-            records = self._parse_csv(path)
+        if suffix in ('.csv', '.tsv'):
+            records = self._parse_csv(path, delimiter="\t" if suffix == ".tsv" else ",")
         elif suffix == '.json':
             records = self._parse_json(path)
+        elif suffix == '.jsonl':
+            records = self._parse_jsonl(path)
         elif suffix == '.evtx':
             records = self._parse_evtx(path)
         else:
@@ -133,16 +139,34 @@ class ControllerBridge:
         
         return records
     
-    def _parse_csv(self, path: Path) -> List[dict]:
+    def _parse_csv(self, path: Path, delimiter: str = ",") -> List[dict]:
         """Parse CSV file"""
         import csv
         records = []
         with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-            reader = csv.DictReader(f)
+            reader = csv.DictReader(f, delimiter=delimiter)
             for row in reader:
                 # Create raw_line from the CSV row
                 raw_line = ','.join(f"{k}={v}" for k, v in row.items())
                 records.append({"raw_line": raw_line, **row})
+        return records
+
+    def _parse_jsonl(self, path: Path) -> List[dict]:
+        """Parse JSON Lines file"""
+        import json
+        records = []
+        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    item = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(item, dict):
+                    raw_line = json.dumps(item)
+                    records.append({"raw_line": raw_line, **item})
         return records
     
     def _parse_json(self, path: Path) -> List[dict]:

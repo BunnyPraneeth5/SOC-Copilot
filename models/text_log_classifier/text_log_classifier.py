@@ -25,6 +25,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, accuracy_score
 
 from soc_copilot.core.logging import get_logger
+from soc_copilot.security.model_integrity import verify_model_file
+from soc_copilot.security.network import is_external_ip
 
 logger = get_logger(__name__)
 
@@ -68,9 +70,7 @@ class TextLogFeatureExtractor:
 
     @staticmethod
     def is_external_ip(ip: str) -> bool:
-        if not ip:
-            return False
-        return not ip.startswith(("192.168.", "10.", "172.16.", "127.", "0.0.0.0"))
+        return is_external_ip(ip)
 
     def extract(self, parsed: dict) -> np.ndarray:
         """Extract feature vector from a parsed log dict.
@@ -163,6 +163,10 @@ class TextLogClassifier:
         model_path = Path(model_path)
         if not model_path.exists():
             raise FileNotFoundError(f"Text log model not found: {model_path}")
+
+        integrity = verify_model_file(model_path)
+        if not integrity.is_valid:
+            raise RuntimeError(f"Model integrity check failed: {integrity.error}")
 
         bundle = joblib.load(model_path)
         self.model = bundle["model"]

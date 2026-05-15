@@ -9,6 +9,8 @@ from datetime import datetime
 
 import numpy as np
 import joblib
+
+from soc_copilot.security.model_integrity import verify_model_file
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
@@ -308,6 +310,10 @@ def load_random_forest(model_path: str | Path) -> RandomForestTrainer:
     if not model_path.exists():
         raise FileNotFoundError(f"Model not found: {model_path}")
     
+    integrity = verify_model_file(model_path)
+    if not integrity.is_valid:
+        raise RuntimeError(f"Model integrity check failed: {integrity.error}")
+
     data = joblib.load(model_path)
     
     config = RandomForestConfig(**data["config"])

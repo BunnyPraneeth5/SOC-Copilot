@@ -13,6 +13,7 @@ import joblib
 from pydantic import BaseModel, Field
 
 from soc_copilot.core.logging import get_logger
+from soc_copilot.security.model_integrity import verify_model_file
 
 logger = get_logger(__name__)
 
@@ -145,6 +146,9 @@ class ModelInference:
         # Load Isolation Forest
         if_path = models_dir / f"{self.config.isolation_forest_name}.joblib"
         if if_path.exists():
+            integrity = verify_model_file(if_path)
+            if not integrity.is_valid:
+                raise RuntimeError(f"Model integrity check failed: {integrity.error}")
             self._isolation_forest = joblib.load(if_path)
             logger.info("isolation_forest_loaded", path=str(if_path))
         else:
@@ -153,6 +157,9 @@ class ModelInference:
         # Load Random Forest
         rf_path = models_dir / f"{self.config.random_forest_name}.joblib"
         if rf_path.exists():
+            integrity = verify_model_file(rf_path)
+            if not integrity.is_valid:
+                raise RuntimeError(f"Model integrity check failed: {integrity.error}")
             self._random_forest = joblib.load(rf_path)
             logger.info("random_forest_loaded", path=str(rf_path))
         else:

@@ -11,6 +11,8 @@ from .schemas import AnalysisResult, AlertSummary, PipelineStats, LogSummary
 from .result_store import ResultStore
 
 from soc_copilot.core.logging import get_logger
+from soc_copilot.security.model_integrity import strict_model_integrity_enabled
+from soc_copilot.security.network import is_external_ip, online_enrichment_enabled
 
 logger = get_logger(__name__)
 
@@ -24,6 +26,11 @@ class AppController:
         self.result_store = ResultStore(max_results=1000)
         self._pipeline = None
         self._text_log_classifier = None
+        self._text_log_model_status = {
+            "loaded": False,
+            "path": "",
+            "error": None,
+        }
         self._running = False
         self._sources_count = 0
         self._dropped_count = 0
@@ -40,6 +47,11 @@ class AppController:
             clf = TextLogClassifier()
             clf.load(text_log_model_path)
             self._text_log_classifier = clf
+            self._text_log_model_status = {
+                "loaded": True,
+                "path": str(text_log_model_path),
+                "error": None,
+            }
             logger.info("text_log_classifier_loaded", path=str(text_log_model_path))
         except (FileNotFoundError, ImportError) as e:
             logger.warning(
@@ -48,6 +60,11 @@ class AppController:
                 fallback="rule-based detection",
             )
             self._text_log_classifier = None
+            self._text_log_model_status = {
+                "loaded": False,
+                "path": str(text_log_model_path),
+                "error": str(e),
+            }
     
     def process_batch(self, records: List[dict]) -> Optional[AnalysisResult]:
         """Process batch of raw log records"""
@@ -272,9 +289,7 @@ class AppController:
     @staticmethod
     def _is_external_ip(ip: str) -> bool:
         """Check if an IP address is external (non-RFC1918)."""
-        if not ip:
-            return False
-        return not ip.startswith(("192.168.", "10.", "172.16.", "127.", "0.0.0.0"))
+        return is_external_ip(ip)
     
     def _rule_based_detect(self, lines: List[str]) -> List[AlertSummary]:
         """Rule-based threat detection for custom text log formats.
@@ -468,7 +483,7 @@ class AppController:
         # Mark external IPs as suspicious
         for ip_field in ["src_ip", "dst_ip"]:
             ip = entry.get(ip_field, "")
-            if ip and not ip.startswith(("192.168.", "10.", "172.16.", "0.0.0.0", "")):
+            if is_external_ip(ip):
                 entry["external_ip"] = True
         
         return entry
@@ -538,6 +553,15 @@ class AppController:
     
     def get_stats(self) -> dict:
         """Get controller statistics"""
+        deduplication = {}
+        model_integrity = {}
+        if self._pipeline and hasattr(self._pipeline, "_analysis"):
+            analysis = getattr(self._pipeline, "_analysis", None)
+            if analysis and hasattr(analysis, "get_deduplication_stats"):
+                deduplication = analysis.get_deduplication_stats()
+        if self._pipeline and hasattr(self._pipeline, "get_security_status"):
+            model_integrity = self._pipeline.get_security_status().get("model_integrity", {})
+
         return {
             "pipeline_loaded": self._pipeline is not None,
             "results_stored": self.result_store.count(),
@@ -546,6 +570,13 @@ class AppController:
             "sources_count": self._sources_count,
             "dropped_count": self._dropped_count,
             "batches_processed": self._batches_processed,
+            "deduplication": deduplication,
+            "security": {
+                "strict_model_integrity": strict_model_integrity_enabled(),
+                "online_enrichment_enabled": online_enrichment_enabled(),
+                "model_integrity": model_integrity,
+                "text_log_model": dict(self._text_log_model_status),
+            },
         }
     
     def clear_results(self):
