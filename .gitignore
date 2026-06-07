@@ -7,9 +7,6 @@ __pycache__/
 *.so
 *.egg
 *.egg-info/
-dist/
-build/
-*.whl
 pip-wheel-metadata/
 
 # ========================
@@ -38,7 +35,12 @@ env/
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+# ========================
+# Office Temporary Files
+# ========================
 ~$*
+~WRL*.tmp
 
 # ========================
 # Testing & Coverage
@@ -52,22 +54,23 @@ htmlcov/
 .ruff_cache/
 
 # ========================
-# SOC Copilot — Data & Models
+# SOC Copilot - Data & Models
 # ========================
 data/datasets/
-data/logs/
 data/models/*.joblib
-data/models_backup/
-data/drift/
-data/feedback/
-data/governance/
-data/ioc_database/
+data/models_backup/*.joblib
+data/drift/*.db
+data/feedback/*.db
+data/governance/*.db
+data/ioc_database/*.db
 
 # ========================
-# SOC Copilot — Runtime
+# SOC Copilot - Runtime
 # ========================
-logs/
+logs/**/*.log
+data/logs/**/*.log
 *.log
+.kill
 
 # ========================
 # Build & Distribution
@@ -76,12 +79,12 @@ dist/
 build/
 installer/output/
 *.spec
+*.whl
 
 # ========================
 # Test Fixtures (large)
 # ========================
 tests/fixtures/*.evtx
-tests/fixtures/*.csv
 
 # ========================
 # Temporary Files
@@ -89,3 +92,12 @@ tests/fixtures/*.csv
 *.tmp
 test_out.txt
 test_output.txt
+
+# ========================
+# Audit Outputs
+# ========================
+Project_Audit/
+*_audit.txt
+model_audit.txt
+secrets_audit.txt
+sql_audit.txt
