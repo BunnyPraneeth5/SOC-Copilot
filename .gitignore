@@ -101,3 +101,8 @@ Project_Audit/
 model_audit.txt
 secrets_audit.txt
 sql_audit.txt
+
+# ========================
+# Project Knowledge
+# ========================
+docs/project-knowledge/
