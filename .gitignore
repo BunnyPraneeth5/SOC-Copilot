@@ -106,3 +106,7 @@ sql_audit.txt
 # Project Knowledge
 # ========================
 docs/project-knowledge/
+*.docx
+*.pptx
+docs/*.docx
+docs/presentations/
