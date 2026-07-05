@@ -18,6 +18,7 @@ Today, SOC Copilot successfully ingests and parses multiple log formats (CSV, JS
 ### 2. Current Architecture
 
 #### Full Project Structure
+
 The repository is modular and split into phases, ensuring separation of concerns between data ingestion, machine learning inference, governance, and user interface.
 
 ```text
@@ -35,6 +36,7 @@ src/soc_copilot/
 ```
 
 #### Module Responsibilities
+
 - **`core/`**: Provides the foundational building blocks. It exists to guarantee structured logging (`structlog`) and uniform configuration without circular dependencies.
 - **`data/`**: Manages the ETL pipeline. `log_ingestion/` abstracts away log formats (CSV, EVTX, etc.), while `feature_engineering/` extracts 64-78 dimensional vectors required by the models. This separation allows new log formats to be added without touching the ML logic.
 - **`models/`**: Houses the detection engine. `inference/` manages loading serialized `joblib` models safely, while `ensemble/coordinator.py` merges the anomaly scores and classification confidences to determine final risk severity.
@@ -43,6 +45,7 @@ src/soc_copilot/
 - **`phase4/ui/`**: The desktop presentation layer built in PyQt6. It leverages a `ControllerBridge` via `QThread` to interact with the backend, ensuring the interface remains highly responsive during intense log processing.
 
 #### Request Flow (UI to Result)
+
 When a user interacts with the system (e.g., uploading a log file or clicking an alert), the request traverses a strict boundary between the UI thread and the processing thread to prevent GUI lockups.
 
 ```mermaid
@@ -76,6 +79,7 @@ sequenceDiagram
 ```
 
 #### Data Flow (Ingestion to Alert)
+
 Network traffic and system logs enter the system through a unified pipeline that prepares, scores, and filters the data.
 
 ```mermaid
@@ -96,64 +100,77 @@ flowchart TD
 - **Why it is built this way:** The bifurcated ML approach (Isolation Forest alongside Random Forest) ensures the system can detect zero-day anomalies (via IF) while retaining high-precision categorization for known threats like DDoS or BruteForce (via RF). Deduplication occurs post-generation to prevent alert storms and analyst fatigue.
 
 #### MCP Orchestrator & Async Coordination
+
 The `MCPOrchestrator` uses Python's `asyncio.gather()` to run `ReconAgent`, `ReputationAgent`, and `ShodanAgent` concurrently.
+
 - **Why asyncio?** Threat intelligence APIs (VirusTotal, AbuseIPDB, Shodan) are heavily I/O-bound. Running them synchronously would block the pipeline for 10-15 seconds per IP. `asyncio.gather(return_exceptions=True)` ensures that if Shodan fails or times out (10s max), the Recon and Reputation results are still captured and passed to the `ReportAgent`.
 
 #### Threat Intelligence Merging
+
 Threat intelligence APIs are called in the `mcp` layer. `ReputationAgent` hits VirusTotal and AbuseIPDB, while `ReconAgent` handles WHOIS/GeoIP.
+
 - **Why this separation?** It limits blast radius. If VirusTotal revokes an API key, only `ReputationAgent` suffers a `PARTIAL` failure state. The `ReportAgent` then accepts these disjointed outputs (via Pydantic `BaseModel` objects) and feeds them into the Claude LLM to synthesize a final `ThreatReport`.
 
 ### 3. Component Deep Dives
 
 #### MLModel (Isolation Forest + Random Forest)
+
 - **What it does:** Scans 84-dimensional network flow data to detect anomalies and explicitly classify known attacks (DDoS, BruteForce, Malware, etc.).
 - **Why it was built this way:** The hybrid approach balances detecting known threats (high precision, low false-positive rate via RF) and unknown zero-day anomalies (broad recall via IF).
 - **Inputs/Outputs:** Takes numerical and categorical normalized vectors. Outputs a composite Risk Score (0.0 to 1.0) and a string classification with confidence percentage.
 - **Known limitations:** `src/soc_copilot/models/inference/engine.py` (line 152) — Requires serialized `joblib` artifacts which inherently introduce supply-chain risks, hence the reliance on strict file hash verification. It can also cause high memory spikes during batch loading.
 
 #### MCPOrchestrator
+
 - **What it does:** Acts as the traffic cop for automated threat intelligence gathering.
 - **Why it was built this way:** To speed up analyst workflows by fetching contextual data in parallel instead of making analysts alt-tab to browser windows for lookup APIs.
 - **Inputs/Outputs:** Takes an IP address string. Outputs a structured `ThreatReport` containing recon, reputation, and Shodan data wrapped by an LLM-generated summary.
 - **Known limitations:** `src/soc_copilot/mcp/orchestrator.py` (line 55) — Currently mostly a scaffold. Lacks the full `diskcache` integration for the `ip:<target>` key format and has yet to implement the `asyncio.gather` execution logic.
 
 #### ReconAgent
+
 - **What it does:** Performs passive IP reconnaissance (WHOIS, reverse-DNS, ASN, and GeoIP).
 - **Why it was built this way:** Uses a mix of blocking Python libraries (`ipwhois`, `socket`) via thread pool executors and async HTTP clients (`httpx`) to ensure the agent remains non-blocking to the main orchestrator event loop.
 - **Inputs/Outputs:** Takes an IP string. Outputs a `ReconResult` containing registrar, organization, ASN boundaries, and geolocation coordinates.
 - **Known limitations:** `src/soc_copilot/mcp/recon_agent.py` (line 62) — Heavily reliant on free APIs (`ipwho.is`) which are prone to rate-limiting in high-volume environments.
 
 #### ReputationAgent
+
 - **What it does:** Queries AbuseIPDB and VirusTotal to establish the malicious reputation of an IP.
 - **Why it was built this way:** Two independent sources provide stronger confidence in malicious verdicts. Async `httpx` calls guarantee the agent completes within a strict timeout window.
 - **Inputs/Outputs:** Takes an IP string. Outputs a `ReputationResult` with an AbuseIPDB confidence score (0-100) and a VirusTotal detection ratio.
 - **Known limitations:** `src/soc_copilot/mcp/reputation_agent.py` (line 173) — Scaffold pending API key validation integration. Hard dependency on environmental variables being set correctly.
 
 #### ShodanAgent
+
 - **What it does:** Discovers exposed ports, running service banners, and known CVEs associated with an IP.
 - **Why it was built this way:** Gives analysts immediate insight into whether an attacking IP is a compromised IoT device or a known command-and-control infrastructure node.
 - **Inputs/Outputs:** Takes an IP string. Outputs a `ShodanResult` listing open ports and CVE strings.
 - **Known limitations:** `src/soc_copilot/mcp/shodan_agent.py` (line 33) — Currently just a `NotImplementedError` scaffold.
 
 #### ReportAgent
+
 - **What it does:** Synthesizes the raw data from the other three agents using Anthropic's Claude API.
 - **Why it was built this way:** Analysts need immediate context and actionable summaries, not just raw JSON blocks. The LLM translates raw intelligence into a severity-rated (CRITICAL/HIGH/MEDIUM/LOW) tactical assessment.
 - **Inputs/Outputs:** Takes aggregated `ReconResult`, `ReputationResult`, and `ShodanResult`. Outputs a final `ThreatReport`.
 - **Known limitations:** `src/soc_copilot/mcp/report_agent.py` (line 58) — Currently a scaffold. High latency expected (Claude API calls can take 15-30s), requiring a longer agent timeout (30s).
 
 #### PyQt6 GUI
+
 - **What it does:** Provides the desktop application interface, comprising a Dashboard, Alerts View, Config Panel, and System Status Bar.
 - **Why it was built this way:** To meet the strict "offline desktop-first" requirement. PyQt6 is robust, cross-platform, and allows for complex table rendering required for log analysis.
 - **Inputs/Outputs:** Takes user clicks and file paths. Outputs visual graphs, rendered data tables, and sends signals to the ControllerBridge.
 - **Known limitations:** `src/soc_copilot/phase4/ui/dashboard_v2.py` (line 377) — The main thread can still stutter if large datasets are loaded into `QTableWidget` without pagination or chunking.
 
 #### Config/Auth Layer
+
 - **What it does:** Manages system configuration (thresholds, model hyperparameters, feature definitions) via YAML files in the `config/` directory.
 - **Why it was built this way:** Decoupling configuration from code allows administrators to tune detection thresholds and deduplication windows without recompiling or altering Python files.
 - **Inputs/Outputs:** Reads `.yaml` files. Outputs Python dictionaries or Pydantic validation models.
 - **Known limitations:** `src/soc_copilot/core/config.py` (line 12) — File permissions must be strictly managed by the host OS; there is no internal encryption of the YAML threshold logic.
 
 ### 4. Current Strengths
+
 - **Air-Gapped Viability:** The core hybrid ML pipeline and GUI run completely isolated from the internet. This is a massive strength for deployments in classified or highly regulated environments.
 - **Explainability:** The system refuses to be a "black box." The `EnsembleCoordinator` breaks down exactly why an alert fired, providing contributing factors (e.g., "Risk boosted: severe threat with anomalous behavior") mapped to MITRE attack categories.
 - **Resilient Threading:** The `ControllerBridge` (utilizing QThread) effectively shields the PyQt6 GUI from freezing during heavy inference workloads or large file ingestion.
@@ -187,9 +204,11 @@ The following significant technical debt items have been explicitly addressed an
 ## PART 2 — WHERE IT SHOULD GO
 
 ### 6. Future Vision
+
 In the next 12 months, SOC Copilot must transition from a purely reactive analysis tool into an active investigation platform, primarily by exposing its capabilities through a Multi-Agent Cyber-investigation Pipeline (MCP). Ultimately, the application will integrate a FastAPI backend layer to allow the desktop application to act as a local MCP server, allowing external agents or trusted local network services to query its intelligence securely.
 
 **Scope Guardrails (What it will NOT become):**
+
 - **A cloud-based SaaS:** SOC Copilot will remain strictly offline and desktop-first. Data sovereignty is the primary value proposition.
 - **An enterprise Splunk/Elastic replacement:** It is a localized, tactical assistant, not a petabyte-scale data lake.
 - **A general-purpose AI assistant:** The LLM integration is strictly sandboxed to threat reporting; it will not answer general queries.
@@ -199,7 +218,8 @@ In the next 12 months, SOC Copilot must transition from a purely reactive analys
 
 The immediate priority is completing the scaffolded MCP integration. The following milestones represent a tight, phased sequence to bring automated threat investigation to the UI.
 
-#### Milestone 1: Reputation and Shodan Agent Implementation
+#### Milestone 1: Reputation and Shodan Agent Implementation (Completed 05/07/2026 08:00PM)
+
 - **Goal:** Replace the `NotImplementedError` scaffolds in `ReputationAgent` and `ShodanAgent` with working async API calls.
 - **Why it matters:** Brings critical external context (malware history, open ports) to raw IP addresses, drastically reducing manual lookup time.
 - **Files affected:** `src/soc_copilot/mcp/reputation_agent.py`, `src/soc_copilot/mcp/shodan_agent.py`.
@@ -209,6 +229,7 @@ The immediate priority is completing the scaffolded MCP integration. The followi
 - **Risks:** Missing API keys causing silent failures (mitigated by existing `APIKeyMissingError` logic).
 
 #### Milestone 2: Claude LLM Report Agent
+
 - **Goal:** Connect the `ReportAgent` to the Anthropic Claude API to consume the outputs of agents 1-3 and output a structured `ThreatReport`.
 - **Why it matters:** Human-readable summaries and severity ratings (CRITICAL/HIGH/MEDIUM/LOW) are required to make raw intel actionable for Tier 1 analysts.
 - **Files affected:** `src/soc_copilot/mcp/report_agent.py`.
@@ -218,6 +239,7 @@ The immediate priority is completing the scaffolded MCP integration. The followi
 - **Risks:** High latency from the Claude API leading to orchestrator timeouts.
 
 #### Milestone 3: Orchestrator Parallelization & Caching
+
 - **Goal:** Implement `asyncio.gather()` in `MCPOrchestrator` to run the collection agents concurrently, and implement the 6-hour TTL `diskcache`.
 - **Why it matters:** Running API lookups synchronously takes too long. Caching prevents rate-limiting and redundant API costs for frequently attacking IPs.
 - **Files affected:** `src/soc_copilot/mcp/orchestrator.py`.
@@ -227,6 +249,7 @@ The immediate priority is completing the scaffolded MCP integration. The followi
 - **Risks:** Thread exhaustion or unhandled exceptions in `asyncio.gather` tearing down the main loop.
 
 #### Milestone 4: PyQt6 UI Binding
+
 - **Goal:** Bind the orchestrator to the GUI so that double-clicking an IP in the `AlertsView` triggers the investigation asynchronously.
 - **Why it matters:** This is the actual user feature—connecting the backend pipeline to analyst interactions.
 - **Files affected:** `src/soc_copilot/phase4/ui/alerts_view.py`, `src/soc_copilot/phase4/ui/controller_bridge.py`.
@@ -286,6 +309,7 @@ flowchart TD
 The milestones outlined above must be implemented strictly in order (1 through 4). Do not attempt to bind the PyQt6 UI (Milestone 4) until the `MCPOrchestrator` is successfully parallelizing agents and caching results (Milestone 3) via CLI test scripts.
 
 **Guiding Principles:**
+
 1. **Never block the UI:** All MCP investigations must run in a background thread.
 2. **Graceful degradation:** If an external API is down or a key is missing, the system must generate an alert without that specific enrichment data. It must never crash the core application.
 3. **Keep it local:** Ensure the `SOC_COPILOT_ENABLE_ONLINE_ENRICHMENT` flag remains respected across all new agent implementations. If it is false, the agents must immediately return disabled status codes.

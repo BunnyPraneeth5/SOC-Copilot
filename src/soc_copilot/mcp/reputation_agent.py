@@ -106,8 +106,9 @@ class ReputationAgent(BaseAgent):
         except httpx.HTTPStatusError as exc:
             status = exc.response.status_code
             log.warning("abuseipdb_http_error", ip=ip, status=status)
+            detail = "HTTP 429 rate limit" if status == 429 else f"HTTP {status}"
             raise AgentLookupError(
-                self.name, "AbuseIPDB", f"HTTP {status}"
+                self.name, "AbuseIPDB", detail
             ) from exc
         except httpx.HTTPError as exc:
             log.warning("abuseipdb_lookup_failed", ip=ip, error=str(exc))
@@ -173,8 +174,9 @@ class ReputationAgent(BaseAgent):
         except httpx.HTTPStatusError as exc:
             status = exc.response.status_code
             log.warning("virustotal_http_error", ip=ip, status=status)
+            detail = "HTTP 429 rate limit" if status == 429 else f"HTTP {status}"
             raise AgentLookupError(
-                self.name, "VirusTotal", f"HTTP {status}"
+                self.name, "VirusTotal", detail
             ) from exc
         except httpx.HTTPError as exc:
             log.warning("virustotal_lookup_failed", ip=ip, error=str(exc))
