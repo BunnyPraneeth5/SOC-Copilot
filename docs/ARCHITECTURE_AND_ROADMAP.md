@@ -228,7 +228,7 @@ The immediate priority is completing the scaffolded MCP integration. The followi
 - **Acceptance criteria:** Unit tests pass for both agents; API timeouts correctly yield `AgentStatus.TIMEOUT` or `PARTIAL` results without crashing.
 - **Risks:** Missing API keys causing silent failures (mitigated by existing `APIKeyMissingError` logic).
 
-#### Milestone 2: Claude LLM Report Agent
+#### Milestone 2: Claude LLM Report Agent (Completed 07/07/2026 11:00PM but with different LLM)
 
 - **Goal:** Connect the `ReportAgent` to the Anthropic Claude API to consume the outputs of agents 1-3 and output a structured `ThreatReport`.
 - **Why it matters:** Human-readable summaries and severity ratings (CRITICAL/HIGH/MEDIUM/LOW) are required to make raw intel actionable for Tier 1 analysts.
