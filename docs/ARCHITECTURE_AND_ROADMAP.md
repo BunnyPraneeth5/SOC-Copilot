@@ -218,7 +218,7 @@ In the next 12 months, SOC Copilot must transition from a purely reactive analys
 
 The immediate priority is completing the scaffolded MCP integration. The following milestones represent a tight, phased sequence to bring automated threat investigation to the UI.
 
-#### Milestone 1: Reputation and Shodan Agent Implementation (Completed 05/07/2026 08:00PM)
+#### Milestone 1: Reputation and Shodan Agent Implementation (Done 05/07/2026 08:00PM)
 
 - **Goal:** Replace the `NotImplementedError` scaffolds in `ReputationAgent` and `ShodanAgent` with working async API calls.
 - **Why it matters:** Brings critical external context (malware history, open ports) to raw IP addresses, drastically reducing manual lookup time.
@@ -228,7 +228,7 @@ The immediate priority is completing the scaffolded MCP integration. The followi
 - **Acceptance criteria:** Unit tests pass for both agents; API timeouts correctly yield `AgentStatus.TIMEOUT` or `PARTIAL` results without crashing.
 - **Risks:** Missing API keys causing silent failures (mitigated by existing `APIKeyMissingError` logic).
 
-#### Milestone 2: Claude LLM Report Agent (Completed 07/07/2026 11:00PM but with different LLM)
+#### Milestone 2: Claude LLM Report Agent (Done 07/07/2026 11:00PM but with different LLM)
 
 - **Goal:** Connect the `ReportAgent` to the Anthropic Claude API to consume the outputs of agents 1-3 and output a structured `ThreatReport`.
 - **Why it matters:** Human-readable summaries and severity ratings (CRITICAL/HIGH/MEDIUM/LOW) are required to make raw intel actionable for Tier 1 analysts.
@@ -238,7 +238,7 @@ The immediate priority is completing the scaffolded MCP integration. The followi
 - **Acceptance criteria:** Agent correctly formats the `REPORT_SYSTEM_PROMPT` and parses Claude's response into the Pydantic `ThreatReport` model.
 - **Risks:** High latency from the Claude API leading to orchestrator timeouts.
 
-#### Milestone 3: Orchestrator Parallelization & Caching
+#### Milestone 3: Orchestrator Parallelization & Caching (Done 09/07/2026 02:00AM)
 
 - **Goal:** Implement `asyncio.gather()` in `MCPOrchestrator` to run the collection agents concurrently, and implement the 6-hour TTL `diskcache`.
 - **Why it matters:** Running API lookups synchronously takes too long. Caching prevents rate-limiting and redundant API costs for frequently attacking IPs.
@@ -257,6 +257,39 @@ The immediate priority is completing the scaffolded MCP integration. The followi
 - **Dependencies:** Milestone 3.
 - **Acceptance criteria:** Double-clicking table column 2 (IP) fires a `QRunnable` task to the `QThreadPool`, executing the orchestrator, and emitting a custom `reportReady` Qt signal to display a modal dialogue with the `ThreatReport`. The UI must not freeze.
 - **Risks:** Executing `asyncio` loops inside Qt threads requires careful management to prevent deadlocks or segment faults.
+
+#### Milestone 5: Provider & Connectivity Layer
+
+- **Goal:** Build a provider management layer that tracks the live status of each external service (NVIDIA NIM, Shodan, AbuseIPDB, VirusTotal) and makes the pipeline resilient to missing keys or offline providers.
+- **Why it matters:** This is the online/offline resilience story — the orchestrator must degrade gracefully to local-only mode when a provider is unavailable, rather than failing the entire pipeline.
+- **Files affected:** `src/soc_copilot/phase4/ui/config_panel.py`, `src/soc_copilot/mcp/orchestrator.py`, new `src/soc_copilot/mcp/provider_registry.py`.
+- **Estimated complexity:** Medium
+- **Dependencies:** Milestone 3.
+- **Acceptance criteria:**
+  - PyQt6 settings panel renders a provider card per service showing one of: `Configured`, `Missing key`, or `Offline`.
+  - `check_provider_status()` performs a lightweight ping/auth check per provider and caches the result briefly.
+  - Orchestrator reads live provider status at dispatch time; any provider that is down or unkeyed marks its corresponding agent as `Disabled` and the pipeline continues in local-only/offline mode.
+- **Risks:** Ping checks adding latency to startup; mitigate by running checks lazily on first use and caching aggressively.
+- **Status:** Not started
+
+#### Milestone 6: Live Workflow Visualization (PyQt6-native)
+
+- **Goal:** Embed an animated, real-time pipeline graph directly in the dashboard so analysts can see exactly which stage is active and where an investigation is in flight.
+- **Why it matters:** Provides immediate visual feedback during long-running investigations and makes the system's internal logic transparent — a key differentiator for demos and interviews.
+- **Files affected:** New `src/soc_copilot/phase4/ui/pipeline_graph_widget.py`; `src/soc_copilot/phase4/ui/dashboard_v2.py`; `src/soc_copilot/phase4/controller/app_controller.py`.
+- **Estimated complexity:** High
+- **Dependencies:** Milestone 4 (signals infrastructure must exist before wiring).
+- **Acceptance criteria:**
+  - `PipelineGraphWidget(QGraphicsView)` is embedded in the dashboard with one `QGraphicsScene` per graph.
+  - `NodeItem(QGraphicsItemGroup)` exists for each stage (Parser, Feature Engineering, Isolation Forest, Random Forest, Ensemble, Alert Generator, DB, Recon, Reputation, Shodan, Report Agent); `set_status()` drives node color via `QPropertyAnimation`.
+  - Stage connections are drawn with `QPainterPath` curved lines (n8n-style).
+  - `AppController` emits a `pipeline_stage_updated` Qt signal per stage transition; `PipelineGraphWidget` listens and updates nodes live.
+  - Double-clicking an alert opens a second graph instance showing the investigation sub-pipeline with parallel Recon/Reputation/Shodan branches.
+  - Packet animation: a small `QGraphicsEllipseItem` travels along the connection path between active nodes.
+  - Replay mode: each run logs `(stage, status, timestamp, data)`; a `QTimer` re-emits the signals on demand so any past run can be replayed without re-uploading logs.
+- **Build order:** static graph → real signal wiring → sub-graph on alert double-click → packet animation → replay mode.
+- **Risks:** `QGraphicsScene` performance degrades with many animated items; mitigate by limiting concurrent packet animations and pausing off-screen nodes.
+- **Status:** Not started
 
 ### 8. Target Architecture (with FastAPI)
 

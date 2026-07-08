@@ -10,8 +10,11 @@ final threat analysis.  Results are cached with ``diskcache`` (6-hour TTL).
 
 from __future__ import annotations
 
-from soc_copilot.mcp.base_agent import BaseAgent
-from soc_copilot.mcp.models import AgentResult, ThreatReport
+import asyncio
+
+from soc_copilot.mcp.cache import MCPCache
+from soc_copilot.mcp.exceptions import AgentLookupError
+from soc_copilot.mcp.models import AgentResult, AgentStatus, ThreatReport
 from soc_copilot.mcp.recon_agent import ReconAgent
 from soc_copilot.mcp.reputation_agent import ReputationAgent
 from soc_copilot.mcp.shodan_agent import ShodanAgent
@@ -36,18 +39,65 @@ class MCPOrchestrator:
         self,
         agent_timeout: float = 10.0,
         cache_dir: str = ".cache/mcp",
+        cache: MCPCache | None = None,
     ) -> None:
         self._recon = ReconAgent(timeout=agent_timeout)
         self._reputation = ReputationAgent(timeout=agent_timeout)
         self._shodan = ShodanAgent(timeout=agent_timeout)
-        self._report = ReportAgent(timeout=30.0)
         self._cache_dir = cache_dir
+        self._cache = cache or MCPCache(
+            cache_dir,
+            default_ttl=self.cache_ttl,
+        )
+
+    async def _run_data_agents(self, target: str) -> tuple[
+        AgentResult,
+        AgentResult,
+        AgentResult,
+    ]:
+        """Run Recon, Reputation, and Shodan concurrently."""
+        agent_names = ("ReconAgent", "ReputationAgent", "ShodanAgent")
+        results = await asyncio.gather(
+            self._recon.safe_execute(target),
+            self._reputation.safe_execute(target),
+            self._shodan.safe_execute(target),
+            return_exceptions=True,
+        )
+
+        normalized: list[AgentResult] = []
+        for agent_name, result in zip(agent_names, results, strict=True):
+            if isinstance(result, AgentResult):
+                normalized.append(result)
+            else:
+                normalized.append(
+                    AgentResult(
+                        agent_name=agent_name,
+                        status=AgentStatus.FAILED,
+                        error=str(result),
+                    )
+                )
+
+        return normalized[0], normalized[1], normalized[2]
+
+    def _build_report_agent(
+        self,
+        recon: AgentResult,
+        reputation: AgentResult,
+        shodan: AgentResult,
+    ) -> ReportAgent:
+        """Create a fresh ReportAgent for one investigation."""
+        return ReportAgent(
+            timeout=30.0,
+            recon=recon,
+            reputation=reputation,
+            shodan=shodan,
+        )
 
     async def investigate(self, target: str) -> ThreatReport:
         """Run the full investigation pipeline for a target.
 
         Steps:
-            1. Check diskcache for ``"ip:<target>"``; return early on hit.
+            1. Check diskcache for ``"target:<normalized>"``; return early on hit.
             2. Run Recon + Reputation + Shodan in parallel via
                ``asyncio.gather`` with ``return_exceptions=True``.
             3. Feed results into ReportAgent.
@@ -61,9 +111,34 @@ class MCPOrchestrator:
             A fully-populated :class:`ThreatReport`.
 
         Todo:
-            - Integrate diskcache with key format ``"ip:<target>"``
+            - Integrate diskcache with key format ``"target:<normalized>"``
             - Parallel gather of agents 1–3
             - Feed results into ReportAgent
             - Emit Qt signals back to UI thread
         """
-        raise NotImplementedError("MCPOrchestrator is not yet implemented")
+        # diskcache is synchronous. For this desktop app milestone the cache
+        # access is small enough to perform directly on the event loop.
+        cached_report = self._cache.get_report(target)
+        if cached_report is not None:
+            return cached_report
+
+        # TODO: Concurrent cache misses for the same target deliberately run
+        # duplicate investigations in this milestone instead of sharing one
+        # in-flight task. Add per-target dedupe only if upstream API load
+        # becomes a real product issue.
+        recon, reputation, shodan = await self._run_data_agents(target)
+        report_agent = self._build_report_agent(recon, reputation, shodan)
+        report_result = await report_agent.safe_execute(target)
+
+        if (
+            report_result.status == AgentStatus.SUCCESS
+            and isinstance(report_result.data, ThreatReport)
+        ):
+            self._cache.set_report(target, report_result.data)
+            return report_result.data
+
+        raise AgentLookupError(
+            "MCPOrchestrator",
+            "ReportAgent",
+            report_result.error or "ReportAgent did not produce a ThreatReport",
+        )
