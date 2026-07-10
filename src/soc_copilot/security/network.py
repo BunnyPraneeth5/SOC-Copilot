@@ -36,4 +36,23 @@ def is_external_ip(value: str | None) -> bool:
 
 def online_enrichment_enabled() -> bool:
     """Whether optional online threat-intelligence enrichment may run."""
+    import os
+    import sys
+    is_admin_check = False
+    if sys.platform == "win32":
+        import ctypes
+        try:
+            is_admin_check = ctypes.windll.shell32.IsUserAnAdmin() != 0
+        except Exception:
+            pass
+    else:
+        is_admin_check = getattr(os, "geteuid", lambda: -1)() == 0
+    
+    debug_msg = f"PID: {os.getpid()} | ADMIN: {is_admin_check} | ENV: {os.getenv('SOC_COPILOT_ENABLE_ONLINE_ENRICHMENT')}"
+    print(debug_msg, flush=True)
+    try:
+        with open("c:/Users/karup/projects/SOC-Copilot/logs/debug_enrichment.log", "a") as f:
+            f.write(debug_msg + "\n")
+    except Exception:
+        pass
     return env_flag("SOC_COPILOT_ENABLE_ONLINE_ENRICHMENT", default=False)

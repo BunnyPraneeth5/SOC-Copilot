@@ -5,9 +5,14 @@ import os
 import ctypes
 import subprocess
 from pathlib import Path
+from dotenv import load_dotenv
 
 # Add project root to path
 project_root = Path(__file__).parent
+
+# Load environment variables from .env
+load_dotenv(project_root / ".env")
+
 sys.path.insert(0, str(project_root / "src"))
 sys.path.insert(0, str(project_root))
 
