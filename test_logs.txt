@@ -1,4 +1,0 @@
-2026-01-18 00:04:25 UserLogin user=guest ip=192.168.1.28 status=SUCCESS
-2026-01-18 00:29:40 UserLogin user=guest ip=192.168.1.72 status=SUCCESS
-2026-01-18 02:49:12 FileExecution host=server-02 file=payload.exe
-2026-01-18 02:58:11 DataTransfer source=server-02 destination=185.220.101.45 size=3526MB
