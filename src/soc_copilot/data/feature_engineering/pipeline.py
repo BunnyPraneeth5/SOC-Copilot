@@ -232,9 +232,8 @@ class FeatureEngineeringPipeline:
         
         # Drop non-numeric columns if configured
         if self.config.drop_non_numeric:
-            for col in result.columns:
-                if not np.issubdtype(result[col].dtype, np.number):
-                    if col in self.feature_names:
+            for col in self.feature_names:
+                if col in result.columns and not pd.api.types.is_numeric_dtype(result[col].dtype):
                         # Convert to numeric if possible
                         result[col] = pd.to_numeric(result[col], errors="coerce")
                         result[col] = result[col].fillna(self.config.fill_na_value)

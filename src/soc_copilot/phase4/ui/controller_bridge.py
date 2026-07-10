@@ -1,22 +1,120 @@
 """Read-only bridge between UI and AppController"""
 
-from typing import List, Optional, Dict, Any
+import asyncio
+from dataclasses import dataclass
+from typing import List, Optional, Dict, Any, Callable
 from pathlib import Path
 from datetime import datetime
 import threading
+from PyQt6.QtCore import QObject, QRunnable, QThreadPool, pyqtSignal
 from ..controller import AppController, AnalysisResult
+from soc_copilot.mcp import AgentLookupError, MCPOrchestrator, ThreatReport
 from soc_copilot.security.input_validator import validate_log_file
 
 
-class ControllerBridge:
+@dataclass(frozen=True)
+class InvestigationError:
+    """Controlled error payload safe to pass back to the UI thread."""
+
+    message: str
+    error_type: str
+
+
+class InvestigationSignals(QObject):
+    """Per-task signal carrier owned outside the QRunnable."""
+
+    reportReady = pyqtSignal(str, object, object)  # target, ThreatReport | None, InvestigationError | None
+
+
+class InvestigationWorker(QRunnable):
+    """Run one MCP investigation in a worker thread."""
+
+    def __init__(
+        self,
+        target: str,
+        signals: InvestigationSignals,
+        orchestrator_factory: Callable[[], MCPOrchestrator] = MCPOrchestrator,
+    ) -> None:
+        super().__init__()
+        self.target = target
+        self.signals = signals
+        self._orchestrator_factory = orchestrator_factory
+
+    def run(self) -> None:
+        report: ThreatReport | None = None
+        error: InvestigationError | None = None
+
+        try:
+            orchestrator = self._orchestrator_factory()
+            report = asyncio.run(orchestrator.investigate(self.target))
+        except AgentLookupError as exc:
+            error = InvestigationError(str(exc), type(exc).__name__)
+        except Exception as exc:
+            error = InvestigationError(str(exc), type(exc).__name__)
+
+        self.signals.reportReady.emit(self.target, report, error)
+
+
+class ControllerBridge(QObject):
     """Adapter for UI to access AppController with file upload support and status reporting"""
+
+    reportReady = pyqtSignal(str, object, object)  # target, ThreatReport | None, InvestigationError | None
     
     def __init__(self, controller: AppController):
+        super().__init__()
         self._controller = controller
         self._permission_status = None
         self._sources_added = 0
         self._process_lock = threading.Lock()  # Serialize pipeline access
+        self._in_flight_targets: set[str] = set()
+        self._active_investigations: dict[str, dict[str, object]] = {}
         self._check_permissions()
+
+    def is_investigation_in_flight(self, target: str) -> bool:
+        """Return whether target is queued or running."""
+        return self._normalize_investigation_target(target) in self._in_flight_targets
+
+    def investigate_target(self, target: str) -> bool:
+        """Submit target investigation unless it is already queued or running."""
+        normalized = self._normalize_investigation_target(target)
+        if not normalized or normalized in self._in_flight_targets:
+            return False
+
+        signals = InvestigationSignals()
+        worker = InvestigationWorker(normalized, signals)
+        signals.reportReady.connect(self._on_investigation_ready)
+
+        self._in_flight_targets.add(normalized)
+        self._active_investigations[normalized] = {
+            "signals": signals,
+            "worker": worker,
+        }
+
+        try:
+            QThreadPool.globalInstance().start(worker)
+        except Exception:
+            self._in_flight_targets.discard(normalized)
+            self._active_investigations.pop(normalized, None)
+            raise
+
+        return True
+
+    @staticmethod
+    def _normalize_investigation_target(target: str) -> str:
+        """Return the canonical bridge key for an investigation target."""
+        return target.strip().lower()
+
+    def _on_investigation_ready(
+        self,
+        target: str,
+        report: ThreatReport | None,
+        error: InvestigationError | None,
+    ) -> None:
+        """Clear target state before notifying UI listeners."""
+        normalized = self._normalize_investigation_target(target)
+        self._in_flight_targets.discard(normalized)
+        self._active_investigations.pop(normalized, None)
+        self.reportReady.emit(target, report, error)
     
     def _check_permissions(self):
         """Check system permissions on init"""

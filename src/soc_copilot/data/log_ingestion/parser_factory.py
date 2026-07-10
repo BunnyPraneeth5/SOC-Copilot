@@ -150,7 +150,7 @@ class ParserFactory:
             ValueError: If format cannot be detected
         """
         if validate_input:
-            validation = validate_log_file(filepath, must_exist=True)
+            validation = validate_log_file(filepath, must_exist=False)
             if not validation.is_valid:
                 raise ValueError(validation.error)
             filepath = validation.sanitized_path or Path(filepath)
@@ -158,7 +158,7 @@ class ParserFactory:
             filepath = Path(filepath)
         
         if not filepath.exists():
-            raise FileNotFoundError(f"Log file not found: {filepath}")
+            raise ValueError(f"Path does not exist: {filepath}")
         
         # Determine parser to use
         if format_hint:

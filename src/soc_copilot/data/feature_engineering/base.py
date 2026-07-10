@@ -33,7 +33,7 @@ class FeatureDefinition(BaseModel):
     description: str
     feature_type: FeatureType
     numeric_type: str = "float64"  # float64, int64, etc.
-    default_value: float | int = 0
+    default_value: float = 0.0
     min_value: float | None = None
     max_value: float | None = None
     is_nullable: bool = False

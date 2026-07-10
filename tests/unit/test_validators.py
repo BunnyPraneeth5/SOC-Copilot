@@ -201,8 +201,8 @@ class TestParserFactory:
         assert len(records) == 1
     
     def test_parse_file_not_found(self, factory, tmp_path):
-        """Should raise FileNotFoundError."""
-        with pytest.raises(FileNotFoundError):
+        """Should raise ValueError for missing file."""
+        with pytest.raises(ValueError, match="does not exist"):
             factory.parse(tmp_path / "nonexistent.json")
     
     def test_detect_format_json(self, factory, tmp_path):

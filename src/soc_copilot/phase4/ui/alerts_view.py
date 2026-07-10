@@ -2,7 +2,7 @@
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem, 
-    QHeaderView, QLabel, QPushButton, QComboBox, QLineEdit
+    QHeaderView, QLabel, QPushButton, QComboBox, QLineEdit, QMessageBox
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont, QColor
@@ -13,6 +13,15 @@ class AlertsView(QWidget):
     
     alert_selected = pyqtSignal(str, str)  # batch_id, alert_id
     
+    # Column configuration constants
+    TIME_COLUMN = 0
+    PRIORITY_COLUMN = 1
+    CLASSIFICATION_COLUMN = 2
+    SOURCE_IP_COLUMN = 3
+    CONFIDENCE_COLUMN = 4
+    BATCH_ID_COLUMN = 5
+    ACTION_COLUMN = 6
+    
     def __init__(self, bridge):
         super().__init__()
         self.bridge = bridge
@@ -20,6 +29,7 @@ class AlertsView(QWidget):
         self._current_filter = "All"
         self._search_text = ""
         self._init_ui()
+        self.bridge.reportReady.connect(self._on_report_ready)
         
         # Fast refresh for real-time feel
         self.timer = QTimer()
@@ -40,9 +50,9 @@ class AlertsView(QWidget):
         
         # Table
         self.table = QTableWidget()
-        self.table.setColumnCount(6)
+        self.table.setColumnCount(7)
         self.table.setHorizontalHeaderLabels([
-            "Time", "Priority", "Classification", "Source IP", "Confidence", "Batch ID"
+            "Time", "Priority", "Classification", "Source IP", "Confidence", "Batch ID", "Action"
         ])
         
         # Optimize table for performance
@@ -53,6 +63,7 @@ class AlertsView(QWidget):
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.verticalHeader().setDefaultSectionSize(32)  # Compact rows
         self.table.itemClicked.connect(self._on_row_clicked)
+        self.table.itemDoubleClicked.connect(self._on_row_double_clicked)
         
         # Performance: disable updates during batch operations
         self.table.setUpdatesEnabled(True)
@@ -380,7 +391,7 @@ class AlertsView(QWidget):
         self.table.setUpdatesEnabled(True)
         if preserve_scroll:
             scroll_bar.setValue(scroll_pos)
-    
+            
     def _set_row_data(self, row: int, alert: dict):
         """Set data for a single row - reusable method"""
         items = [
@@ -395,10 +406,24 @@ class AlertsView(QWidget):
         # Set items
         for col, item in enumerate(items):
             self.table.setItem(row, col, item)
+            
+        # Create and add action button
+        btn = QPushButton("Investigate")
+        source_ip = alert["source_ip"]
+        btn.clicked.connect(lambda checked=False, ip=source_ip: self._trigger_investigation(ip))
+        self.table.setCellWidget(row, self.ACTION_COLUMN, btn)
         
-        # Color by priority
-        priority_lower = alert["priority"].lower()
-        if "critical" in priority_lower:
+        self._apply_row_visual_state(row, alert["priority"], source_ip)
+        self._update_action_button(row, source_ip)
+
+    def _apply_row_visual_state(self, row: int, priority: str, source_ip: str):
+        """Apply priority and in-flight visual state to one table row."""
+        in_flight = self.bridge.is_investigation_in_flight(source_ip)
+
+        priority_lower = priority.lower()
+        if in_flight:
+            color = QColor("#777777")
+        elif "critical" in priority_lower:
             color = QColor("#ff4444")
         elif "high" in priority_lower:
             color = QColor("#ff8800")
@@ -406,19 +431,178 @@ class AlertsView(QWidget):
             color = QColor("#ffaa00")
         else:
             color = QColor("#ffffff")
-        
-        # Apply color
-        for col in range(6):
+
+        for col in range(self.ACTION_COLUMN):
             item = self.table.item(row, col)
             if item:
                 item.setForeground(color)
+                item.setToolTip("Investigation in progress" if in_flight else "")
+
+    def _update_action_button(self, row: int, source_ip: str):
+        """Update action button state for a row based on whether investigation is in-flight."""
+        btn = self.table.cellWidget(row, self.ACTION_COLUMN)
+        if not isinstance(btn, QPushButton):
+            return
+        
+        in_flight = self.bridge.is_investigation_in_flight(source_ip)
+        is_invalid_ip = not source_ip or source_ip.upper() == "N/A"
+        
+        if in_flight:
+            btn.setEnabled(False)
+            btn.setText("Investigating...")
+            btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #2a3f5f;
+                    color: #888888;
+                    border: 1px solid #2a3f5f;
+                    border-radius: 4px;
+                    padding: 2px 8px;
+                }
+            """)
+        elif is_invalid_ip:
+            btn.setEnabled(False)
+            btn.setText("N/A")
+            btn.setStyleSheet("""
+                QPushButton {
+                    background-color: transparent;
+                    color: #555555;
+                    border: none;
+                }
+            """)
+        else:
+            btn.setEnabled(True)
+            btn.setText("Investigate")
+            btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #00d4ff;
+                    color: #0a0a1a;
+                    border: none;
+                    border-radius: 4px;
+                    padding: 2px 8px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #00b4df;
+                }
+            """)
+
+    def _reapply_in_flight_row_state(self):
+        """Refresh in-flight visuals for currently displayed rows."""
+        for row in range(self.table.rowCount()):
+            priority_item = self.table.item(row, self.PRIORITY_COLUMN)
+            source_item = self.table.item(row, self.SOURCE_IP_COLUMN)
+            priority = priority_item.text() if priority_item else ""
+            source_ip = source_item.text() if source_item else ""
+            self._apply_row_visual_state(row, priority, source_ip)
+            self._update_action_button(row, source_ip)
     
     def _on_row_clicked(self, item):
         """Handle row click with error handling"""
         try:
             row = item.row()
-            batch_id = self.table.item(row, 5).text()
-            alert_id = self.table.item(row, 2).text()  # Use classification as identifier
+            batch_id = self.table.item(row, self.BATCH_ID_COLUMN).text()
+            alert_id = self.table.item(row, self.CLASSIFICATION_COLUMN).text()  # Use classification as identifier
             self.alert_selected.emit(batch_id, alert_id)
         except Exception:
             pass  # Ignore click errors
+
+    def _find_rows_by_ip(self, ip: str) -> list[int]:
+        """Scan the table to find all row indices matching the given IP address."""
+        if not ip:
+            return []
+        rows = []
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, self.SOURCE_IP_COLUMN)
+            if item and item.text().strip() == ip.strip():
+                rows.append(row)
+        return rows
+
+    def _trigger_investigation(self, source_ip: str):
+        """Common logic to start an async investigation for an IP."""
+        if not source_ip or source_ip.upper() == "N/A":
+            return
+
+        if self.bridge.is_investigation_in_flight(source_ip):
+            return
+
+        rows = self._find_rows_by_ip(source_ip)
+        
+        try:
+            self.bridge.investigate_target(source_ip)
+            for row in rows:
+                priority_item = self.table.item(row, self.PRIORITY_COLUMN)
+                priority = priority_item.text() if priority_item else "Low"
+                self._apply_row_visual_state(row, priority, source_ip)
+                self._update_action_button(row, source_ip)
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Investigation Failed",
+                f"Could not start investigation for {source_ip}:\n{exc}",
+            )
+            for row in rows:
+                priority_item = self.table.item(row, self.PRIORITY_COLUMN)
+                priority = priority_item.text() if priority_item else "Low"
+                self._apply_row_visual_state(row, priority, source_ip)
+                self._update_action_button(row, source_ip)
+
+    def _on_row_double_clicked(self, item):
+        """Start an async investigation for the row source IP."""
+        try:
+            row = item.row()
+            source_item = self.table.item(row, self.SOURCE_IP_COLUMN)
+            source_ip = source_item.text().strip() if source_item else ""
+        except Exception:
+            return  # Row may have been rebuilt during refresh.
+
+        self._trigger_investigation(source_ip)
+
+    def _on_report_ready(self, target, report, error):
+        """Show investigation result delivered from the bridge."""
+        self._reapply_in_flight_row_state()
+
+        if error is not None:
+            message = getattr(error, "message", str(error))
+            QMessageBox.critical(
+                self,
+                "Investigation Failed",
+                f"Investigation failed for {target}:\n{message}",
+            )
+            return
+
+        QMessageBox.information(
+            self,
+            f"Threat Report: {target}",
+            self._format_threat_report(report),
+        )
+
+    def _format_threat_report(self, report) -> str:
+        """Format a ThreatReport defensively for modal display."""
+        if report is None:
+            return "No report was returned."
+
+        severity = getattr(getattr(report, "severity", None), "value", None)
+        if severity is None:
+            severity = getattr(report, "severity", "Unknown")
+
+        lines = [
+            f"Target: {getattr(report, 'target', 'Unknown')}",
+            f"Severity: {severity or 'Unknown'}",
+            "",
+            getattr(report, "summary", "") or "No summary provided.",
+        ]
+
+        recommendations = getattr(report, "recommendations", None) or []
+        if recommendations:
+            lines.extend(["", "Recommendations:"])
+            lines.extend(f"- {item}" for item in recommendations)
+
+        shodan = getattr(report, "shodan", None)
+        open_ports = getattr(shodan, "open_ports", None) if shodan else None
+        cves = getattr(shodan, "cves", None) if shodan else None
+        if open_ports:
+            lines.extend(["", f"Open ports: {', '.join(str(port) for port in open_ports)}"])
+        if cves:
+            lines.extend(["", f"CVEs: {', '.join(str(cve) for cve in cves)}"])
+
+        return "\n".join(lines)

@@ -191,9 +191,11 @@ class SOCCopilot:
             df.loc[i, "_source_file"] = str(record.source_file) if record.source_file else ""
             df.loc[i, "_line_number"] = getattr(record, "line_number", i)
 
-        # Preprocessing
+        # Preprocessing — pipeline expects list[dict], not a DataFrame
         try:
-            df_pre = self._preprocessing.fit_transform(df)
+            records_as_dicts = df.to_dict(orient="records")
+            preprocessed = self._preprocessing.fit_transform(records_as_dicts)
+            df_pre = preprocessed if isinstance(preprocessed, pd.DataFrame) else pd.DataFrame(preprocessed)
         except Exception as e:
             logger.error("preprocessing_failed", error=str(e))
             df_pre = df.copy()
@@ -270,7 +272,11 @@ class SOCCopilot:
         context: dict[str, Any] = {}
 
         for field in ["src_ip", "dst_ip", "src_port", "dst_port", "protocol"]:
-            if field in row.index and pd.notna(row[field]):
+            if record and field in record.raw and pd.notna(record.raw[field]):
+                context[field] = record.raw[field]
+            elif f"{field}_raw" in row.index and pd.notna(row[f"{field}_raw"]):
+                context[field] = row[f"{field}_raw"]
+            elif field in row.index and pd.notna(row[field]):
                 context[field] = row[field]
 
         if record:

@@ -110,3 +110,13 @@ docs/project-knowledge/
 *.pptx
 docs/*.docx
 docs/presentations/
+
+# ========================
+# Local Caches & Dev Scratch Files
+# ========================
+.cache/
+venv_broken/
+test_logs.txt
+test_script.py
+test_ui_refresh.py
+sample_logs.jsonl

@@ -4,12 +4,7 @@ import unittest
 from unittest.mock import Mock, patch, MagicMock
 import sys
 
-# Mock PyQt6 for testing
-mock_qt = MagicMock()
-sys.modules['PyQt6'] = mock_qt
-sys.modules['PyQt6.QtWidgets'] = mock_qt
-sys.modules['PyQt6.QtCore'] = mock_qt
-sys.modules['PyQt6.QtGui'] = mock_qt
+
 
 
 class TestDashboardImprovements(unittest.TestCase):
