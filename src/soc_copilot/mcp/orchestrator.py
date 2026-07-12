@@ -14,7 +14,8 @@ import asyncio
 
 from soc_copilot.mcp.cache import MCPCache
 from soc_copilot.mcp.exceptions import AgentLookupError
-from soc_copilot.mcp.models import AgentResult, AgentStatus, ThreatReport
+from soc_copilot.mcp.models import AgentResult, AgentStatus, ThreatReport, ThreatSeverity
+from soc_copilot.security.network import is_external_ip
 from soc_copilot.mcp.recon_agent import ReconAgent
 from soc_copilot.mcp.reputation_agent import ReputationAgent
 from soc_copilot.mcp.shodan_agent import ShodanAgent
@@ -93,6 +94,27 @@ class MCPOrchestrator:
             shodan=shodan,
         )
 
+    def _build_internal_target_report(self, target: str) -> ThreatReport:
+        """Build a lightweight templated report for private/internal IPs, bypassing enrichment and the LLM."""
+        return ThreatReport(
+            target=target,
+            severity=ThreatSeverity.LOW,
+            summary=(
+                f"{target} is a private/internal address. External threat "
+                "intelligence enrichment (Recon, Reputation, Shodan) does not "
+                "apply to internal network ranges, so this report was "
+                "generated without external lookups or an LLM call."
+            ),
+            recommendations=[
+                "Verify this host's identity and purpose within internal network documentation.",
+                "Cross-reference with internal asset inventory or CMDB if unrecognized.",
+            ],
+            recon=None,
+            reputation=None,
+            shodan=None,
+            llm_model=None,
+        )
+
     async def investigate(self, target: str) -> ThreatReport:
         """Run the full investigation pipeline for a target.
 
@@ -121,6 +143,11 @@ class MCPOrchestrator:
         cached_report = self._cache.get_report(target)
         if cached_report is not None:
             return cached_report
+
+        if not is_external_ip(target):
+            report = self._build_internal_target_report(target)
+            self._cache.set_report(target, report)
+            return report
 
         # TODO: Concurrent cache misses for the same target deliberately run
         # duplicate investigations in this milestone instead of sharing one

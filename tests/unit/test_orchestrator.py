@@ -383,3 +383,32 @@ async def test_run_data_agents_normalizes_unexpected_gather_exceptions() -> None
         error="boom",
     )
     assert shodan.status == AgentStatus.SUCCESS
+
+
+@pytest.mark.asyncio
+async def test_investigate_internal_ip_bypasses_agents_and_caches_report() -> None:
+    cache = FakeCache()
+    orchestrator = MCPOrchestrator(cache=cache)
+    agents = [
+        FakeAgent("ReconAgent"),
+        FakeAgent("ReputationAgent"),
+        FakeAgent("ShodanAgent"),
+    ]
+    orchestrator._recon = agents[0]
+    orchestrator._reputation = agents[1]
+    orchestrator._shodan = agents[2]
+
+    result = await orchestrator.investigate("192.168.1.22")
+
+    assert result.target == "192.168.1.22"
+    assert result.severity == ThreatSeverity.LOW
+    assert "private/internal address" in result.summary
+    assert result.recon is None
+    assert result.reputation is None
+    assert result.shodan is None
+    assert result.llm_model is None
+
+    # Verify no agents were executed
+    assert [agent.targets for agent in agents] == [[], [], []]
+    # Verify report was cached
+    assert cache.writes == [("192.168.1.22", result)]
