@@ -409,6 +409,28 @@ class AppController:
                         ),
                         suggested_action="Block outbound connection, investigate data contents and authorization",
                     ))
+            # Rule 4: Privilege Escalation Detection
+            elif event_type == "PrivilegeEscalation":
+                user = parsed.get("user", "unknown")
+                new_role = parsed.get("new_role", "")
+
+                if new_role.lower() in ("admin", "root"):
+                    alerts.append(AlertSummary(
+                        alert_id=f"RULE-PRIV-{uuid.uuid4().hex[:8]}",
+                        priority="P1-Critical",
+                        classification="PrivilegeEscalation",
+                        confidence=0.90,
+                        anomaly_score=0.93,
+                        risk_score=0.93,
+                        source_ip=None,
+                        destination_ip=None,
+                        timestamp=datetime.now(),
+                        reasoning=(
+                            f"Privilege escalation detected: user '{user}' "
+                            f"was granted '{new_role}' role"
+                        ),
+                        suggested_action="Verify authorization for this role change and audit account activity immediately",
+                    ))
         
         return alerts
     
@@ -433,7 +455,8 @@ class AppController:
             "protocol": "TCP",
             "raw_log": line,
             "login_attempts": 0,
-            "data_size_mb": 0
+            "data_size_mb": 0,
+            "new_role": ""
         }
         
         # Extract timestamp (YYYY-MM-DD HH:MM:SS)
@@ -442,9 +465,16 @@ class AppController:
             entry["timestamp"] = ts_match.group(1).replace(' ', 'T') + 'Z'
         
         # Extract event type
-        event_match = re.search(r'\b(UserLogin|LoginAttempt|FileExecution|DataTransfer)\b', line)
+        event_match = re.search(r'\b(UserLogin|LoginAttempt|LoginFailure|BruteForceDetected|FileExecution|MalwareDetected|DataTransfer|DataExfiltration|PrivilegeEscalation)\b', line)
         if event_match:
-            entry["event_type"] = event_match.group(1)
+            raw_event = event_match.group(1)
+            _EVENT_NORMALIZE = {
+                "LoginFailure": "LoginAttempt",
+                "BruteForceDetected": "LoginAttempt",
+                "MalwareDetected": "FileExecution",
+                "DataExfiltration": "DataTransfer",
+            }
+            entry["event_type"] = _EVENT_NORMALIZE.get(raw_event, raw_event)
         
         # Extract key=value pairs
         for match in re.finditer(r'(\w+)=([^\s]+)', line):
@@ -468,9 +498,14 @@ class AppController:
                     pass
             elif key == 'size':
                 try:
-                    entry["data_size_mb"] = int(value.replace('MB', ''))
+                    if 'GB' in value:
+                        entry["data_size_mb"] = int(float(value.replace('GB', '')) * 1024)
+                    else:
+                        entry["data_size_mb"] = int(value.replace('MB', ''))
                 except ValueError:
                     pass
+            elif key == "new_role":
+                entry["new_role"] = value
         
         # Flag suspicious patterns based on thresholds
         if entry["login_attempts"] >= 5:
