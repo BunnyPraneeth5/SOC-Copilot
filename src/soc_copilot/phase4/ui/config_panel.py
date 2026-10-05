@@ -291,6 +291,10 @@ class ConfigPanel(QWidget):
         # Noise Suppression
         self.noise_indicator = StatusIndicator("Noise Suppression", "0 suppressed", "#2196F3")
         status_layout.addWidget(self.noise_indicator, 3, 1)
+
+        # Model Drift (Phase-2 monitor)
+        self.drift_indicator = StatusIndicator("Model Drift", "Unavailable", "#666666")
+        status_layout.addWidget(self.drift_indicator, 4, 0)
         
         status_group.setLayout(status_layout)
         layout.addWidget(status_group)
@@ -437,20 +441,46 @@ class ConfigPanel(QWidget):
 
                 suppressed = dedup.get("suppressed_count", 0)
                 self.noise_indicator.update_status(f"{suppressed} suppressed", "#2196F3")
+
+                self._update_drift_indicator()
             except Exception:
                 self.ingestion_indicator.update_status("Unknown", "#888888")
                 self.integrity_indicator.update_status("Unknown", "#888888")
                 self.online_indicator.update_status("Unknown", "#888888")
                 self.noise_indicator.update_status("Unknown", "#888888")
+                self.drift_indicator.update_status("Unknown", "#888888")
         else:
             not_started_cfg = INGESTION_STATES["not_started"]
             self.ingestion_indicator.update_status(not_started_cfg.label, not_started_cfg.color)
             self.integrity_indicator.update_status("Unknown", "#888888")
             self.online_indicator.update_status("Disabled", "#4CAF50")
             self.noise_indicator.update_status("0 suppressed", "#2196F3")
+            self.drift_indicator.update_status("Unavailable", "#666666")
 
         # Threat-intelligence provider statuses
         self._refresh_providers()
+
+    def _update_drift_indicator(self):
+        """Update the model-drift indicator from the bridge."""
+        try:
+            status = self.bridge.get_drift_status()
+        except Exception:
+            status = None
+        if not status or not status.get("available"):
+            self.drift_indicator.update_status("Unavailable", "#666666")
+            return
+        level = status.get("level")
+        if not level:
+            self.drift_indicator.update_status("Collecting data", "#2196F3")
+            return
+        color = {
+            "NONE": "#4CAF50",
+            "LOW": "#4CAF50",
+            "MODERATE": "#FFC107",
+            "HIGH": "#f44336",
+            "CRITICAL": "#f44336",
+        }.get(str(level).upper(), "#888888")
+        self.drift_indicator.update_status(str(level).title(), color)
 
     _PROVIDER_STATE_COLORS = {
         "Configured": "#4CAF50",

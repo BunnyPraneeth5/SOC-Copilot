@@ -1,8 +1,8 @@
 """Optimized alert details panel with breadcrumb navigation"""
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTextEdit, 
-    QScrollArea, QPushButton, QFrame
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTextEdit,
+    QScrollArea, QPushButton, QFrame, QComboBox, QLineEdit
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QColor
@@ -134,20 +134,36 @@ class AlertDetailsPanel(QWidget):
             if item.widget():
                 item.widget().deleteLater()
     
-    def show_alert(self, batch_id: str, alert_classification: str):
-        """Display alert details with enhanced layout"""
+    def show_alert(
+        self,
+        batch_id: str,
+        alert_classification: str | None = None,
+        alert_id: str | None = None,
+    ):
+        """Display alert details with enhanced layout.
+
+        Prefer matching by ``alert_id`` when given; fall back to the first
+        alert with ``alert_classification`` (older callers only pass the
+        classification text).
+        """
         try:
             result = self.bridge.get_alert_by_id(batch_id)
             if not result:
                 return
-            
+
             # Find matching alert
             alert = None
-            for a in result.alerts:
-                if a.classification == alert_classification:
-                    alert = a
-                    break
-            
+            if alert_id:
+                for a in result.alerts:
+                    if getattr(a, "alert_id", None) == alert_id:
+                        alert = a
+                        break
+            if alert is None and alert_classification:
+                for a in result.alerts:
+                    if a.classification == alert_classification:
+                        alert = a
+                        break
+
             if not alert:
                 return
             
@@ -244,7 +260,10 @@ class AlertDetailsPanel(QWidget):
             
             # Suggested action
             self._add_section("✅ Suggested Action", alert.suggested_action, "#4CAF50")
-            
+
+            # Analyst feedback
+            self._add_feedback_section(alert)
+
             self.details_layout.addStretch()
         
         except Exception as e:
@@ -299,6 +318,128 @@ class AlertDetailsPanel(QWidget):
         content_frame.setLayout(content_layout)
         self.details_layout.addWidget(content_frame)
     
+    # ------------------------------------------------------------------
+    # Analyst feedback (Phase-2 wiring)
+    # ------------------------------------------------------------------
+
+    _FEEDBACK_CLASSES = [
+        "Benign", "DDoS", "BruteForce", "Malware", "Exfiltration",
+        "Suspicious", "PrivilegeEscalation",
+    ]
+
+    def _feedback_enabled(self) -> bool:
+        """Whether the controller reports a feedback store."""
+        try:
+            stats = self.bridge.get_stats() or {}
+            phase2 = stats.get("phase2") or {}
+            return bool(phase2.get("feedback_enabled", False))
+        except Exception:
+            return False
+
+    def _add_feedback_section(self, alert):
+        """Add the analyst feedback controls for the shown alert."""
+        header = QLabel("🗳 Analyst Feedback")
+        header.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
+        header.setStyleSheet("color: #00d4ff; padding: 10px 0 5px 0;")
+        self.details_layout.addWidget(header)
+
+        frame = QFrame()
+        frame.setStyleSheet("""
+            QFrame {
+                background-color: #16213e;
+                border-left: 3px solid #00d4ff;
+                border-radius: 4px;
+                padding: 12px;
+            }
+        """)
+        frame_layout = QVBoxLayout()
+        frame_layout.setContentsMargins(12, 12, 12, 12)
+        frame_layout.setSpacing(8)
+
+        self._feedback_history_label = QLabel("")
+        self._feedback_history_label.setStyleSheet("color: #888888; font-size: 12px;")
+        frame_layout.addWidget(self._feedback_history_label)
+
+        buttons_row = QHBoxLayout()
+        self._accept_button = QPushButton("Accept (true positive)")
+        self._reject_button = QPushButton("Reject (false positive)")
+        self._accept_button.clicked.connect(
+            lambda _c=False: self._submit_feedback(alert.alert_id, "accept")
+        )
+        self._reject_button.clicked.connect(
+            lambda _c=False: self._submit_feedback(alert.alert_id, "reject")
+        )
+        buttons_row.addWidget(self._accept_button)
+        buttons_row.addWidget(self._reject_button)
+        frame_layout.addLayout(buttons_row)
+
+        reclassify_row = QHBoxLayout()
+        self._reclassify_combo = QComboBox()
+        self._reclassify_combo.addItems(self._FEEDBACK_CLASSES)
+        self._reclassify_button = QPushButton("Reclassify")
+        self._reclassify_button.clicked.connect(
+            lambda _c=False: self._submit_feedback(
+                alert.alert_id,
+                "reclassify",
+                label=self._reclassify_combo.currentText(),
+            )
+        )
+        reclassify_row.addWidget(self._reclassify_combo)
+        reclassify_row.addWidget(self._reclassify_button)
+        frame_layout.addLayout(reclassify_row)
+
+        self._comment_edit = QLineEdit()
+        self._comment_edit.setPlaceholderText("Optional comment…")
+        frame_layout.addWidget(self._comment_edit)
+
+        self._feedback_status_label = QLabel("")
+        self._feedback_status_label.setStyleSheet("color: #4CAF50; font-size: 12px;")
+        frame_layout.addWidget(self._feedback_status_label)
+
+        enabled = self._feedback_enabled()
+        for widget in (
+            self._accept_button,
+            self._reject_button,
+            self._reclassify_combo,
+            self._reclassify_button,
+            self._comment_edit,
+        ):
+            widget.setEnabled(enabled)
+            if not enabled:
+                widget.setToolTip("Feedback store not available")
+
+        frame.setLayout(frame_layout)
+        self.details_layout.addWidget(frame)
+
+        self._update_feedback_history(alert.alert_id)
+
+    def _update_feedback_history(self, alert_id: str):
+        """Refresh the 'previous feedback' line for an alert."""
+        try:
+            entries = self.bridge.get_feedback_for_alert(alert_id) or []
+        except Exception:
+            entries = []
+        if entries:
+            latest = entries[0]
+            self._feedback_history_label.setText(
+                f"Previous feedback: {latest.get('analyst_action', '?')} "
+                f"({latest.get('timestamp', '')})"
+            )
+        else:
+            self._feedback_history_label.setText("No feedback yet")
+
+    def _submit_feedback(self, alert_id: str, action: str, label=None):
+        """Send feedback to the controller via the bridge."""
+        comment = self._comment_edit.text().strip() or None
+        try:
+            self.bridge.submit_feedback(alert_id, action, label=label, comment=comment)
+            self._feedback_status_label.setStyleSheet("color: #4CAF50; font-size: 12px;")
+            self._feedback_status_label.setText(f"Feedback recorded: {action}")
+            self._update_feedback_history(alert_id)
+        except Exception as e:
+            self._feedback_status_label.setStyleSheet("color: #ff4444; font-size: 12px;")
+            self._feedback_status_label.setText(f"Error: {e}")
+
     def _show_error(self, error: str):
         """Show error state"""
         self._clear_details()

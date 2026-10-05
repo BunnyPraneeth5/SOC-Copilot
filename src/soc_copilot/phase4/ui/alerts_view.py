@@ -404,8 +404,11 @@ class AlertsView(QWidget):
             QTableWidgetItem(alert["batch_id"])
         ]
         
-        # Set items
+        # Set items (keep the real alert_id on the classification cell so
+        # row clicks can disambiguate alerts sharing a classification)
         for col, item in enumerate(items):
+            if col == self.CLASSIFICATION_COLUMN:
+                item.setData(Qt.ItemDataRole.UserRole, alert.get("alert_id"))
             self.table.setItem(row, col, item)
             
         # Create and add action button
@@ -502,7 +505,8 @@ class AlertsView(QWidget):
         try:
             row = item.row()
             batch_id = self.table.item(row, self.BATCH_ID_COLUMN).text()
-            alert_id = self.table.item(row, self.CLASSIFICATION_COLUMN).text()  # Use classification as identifier
+            class_item = self.table.item(row, self.CLASSIFICATION_COLUMN)
+            alert_id = class_item.data(Qt.ItemDataRole.UserRole) or class_item.text()
             self.alert_selected.emit(batch_id, alert_id)
         except Exception:
             pass  # Ignore click errors

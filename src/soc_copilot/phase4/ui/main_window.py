@@ -474,24 +474,38 @@ class MainWindow(QMainWindow):
         
         self.status_bar.showMessage(f"Showing {priority.title()} priority alerts", 2000)
     
-    def _on_alert_selected(self, batch_id: str, alert_classification: str):
-        """Handle alert selection - navigate to investigation"""
+    def _on_alert_selected(self, batch_id: str, alert_identifier: str):
+        """Handle alert selection - navigate to investigation.
+
+        ``alert_identifier`` is the real alert_id when the row carried one,
+        otherwise the classification text; ``show_alert`` tries alert_id
+        first and falls back to the classification match.
+        """
         try:
-            self.details_panel.show_alert(batch_id, alert_classification)
-            
+            self.details_panel.show_alert(
+                batch_id,
+                alert_classification=alert_identifier,
+                alert_id=alert_identifier,
+            )
+
             # Switch to investigation page
             self.page_stack.setCurrentIndex(2)
             self.sidebar._on_nav_click(2)
-            
+
             # Update assistant
             result = self.bridge.get_alert_by_id(batch_id)
             if result:
                 for alert in result.alerts:
-                    if alert.classification == alert_classification:
+                    if getattr(alert, "alert_id", None) == alert_identifier:
                         self.assistant_panel.explain_alert(alert)
                         break
-            
-            self.status_bar.showMessage(f"Investigating: {alert_classification}", 3000)
+                else:
+                    for alert in result.alerts:
+                        if alert.classification == alert_identifier:
+                            self.assistant_panel.explain_alert(alert)
+                            break
+
+            self.status_bar.showMessage(f"Investigating: {alert_identifier}", 3000)
         except Exception as e:
             self.status_bar.showMessage(f"Error: {str(e)}", 3000)
     

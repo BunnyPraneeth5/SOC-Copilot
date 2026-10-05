@@ -161,11 +161,41 @@ def main():
                 models_available = True
                 print("All required models found.")
         
+        # Phase-2/3 subsystems (drift, feedback, audit) — each optional;
+        # a failure must not prevent the app from launching.
+        drift_monitor = None
+        try:
+            from soc_copilot.phase2.drift.monitor import DriftMonitor
+            drift_monitor = DriftMonitor(project_root / "data" / "drift" / "drift.db")
+            drift_monitor.initialize()
+        except Exception as e:
+            print(f"Warning: Drift monitor unavailable: {e}")
+
+        feedback_store = None
+        try:
+            from soc_copilot.phase2.feedback.store import FeedbackStore
+            feedback_store = FeedbackStore(project_root / "data" / "feedback" / "feedback.db")
+            feedback_store.initialize()
+        except Exception as e:
+            print(f"Warning: Feedback store unavailable: {e}")
+
+        audit_logger = None
+        try:
+            from soc_copilot.phase3.governance import AuditLogger
+            gov_dir = project_root / "data" / "governance"
+            gov_dir.mkdir(parents=True, exist_ok=True)
+            audit_logger = AuditLogger(str(gov_dir / "governance.db"))
+        except Exception as e:
+            print(f"Warning: Audit logger unavailable: {e}")
+
         # Initialize controller with error handling
         controller = AppController(
             str(models_dir),
             killswitch_check=kill_switch.is_active,
             results_db=project_root / "data" / "alerts" / "results.db",
+            drift_monitor=drift_monitor,
+            feedback_store=feedback_store,
+            audit_logger=audit_logger,
         )
         
         try:

@@ -33,6 +33,9 @@ BRUTE_FORCE_THRESHOLD = 5
 # to the network-flow ML models.
 FLOW_FEATURE_OVERLAP_MIN = 10
 
+# Recorded inferences between drift report computations
+DRIFT_REPORT_INTERVAL = 100
+
 _SYSLOG_MONTHS = {
     "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
     "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12,
@@ -58,10 +61,20 @@ class AppController:
         models_dir: str,
         killswitch_check: Optional[Callable[[], bool]] = None,
         results_db=None,
+        drift_monitor=None,
+        feedback_store=None,
+        audit_logger=None,
     ):
         self.models_dir = models_dir
         self.killswitch_check = killswitch_check
         self.result_store = ResultStore(max_results=1000, db_path=results_db)
+        # Phase-2/3 subsystems are injected (no imports from those packages
+        # here — keeps the phase boundary intact).
+        self.drift_monitor = drift_monitor
+        self.feedback_store = feedback_store
+        self.audit_logger = audit_logger
+        self._drift_recorded = 0
+        self._drift_last_report = 0
         self._pipeline = None
         self._text_log_classifier = None
         self._text_log_model_status = {
@@ -191,6 +204,9 @@ class AppController:
             pipeline_stats.classification_distribution[cls] = (
                 pipeline_stats.classification_distribution.get(cls, 0) + 1
             )
+
+        # Feed the drift monitor (reporting-only; never breaks the batch)
+        self._record_drift_inferences(results, alert_summaries)
             
         # Build generic log summaries for ALL logs. Results are matched to
         # their originating line by index, since failed records are skipped.
@@ -586,6 +602,134 @@ class AppController:
 
         return alerts
 
+    def _record_drift_inferences(self, results, alert_summaries) -> None:
+        """Record inference outputs into the drift monitor (if configured)."""
+        if self.drift_monitor is None:
+            return
+        try:
+            for r in results:
+                ensemble = getattr(r, "ensemble_result", None)
+                if ensemble is None:
+                    continue
+                self.drift_monitor.record_inference(
+                    getattr(ensemble, "anomaly_score", 0.0) or 0.0,
+                    getattr(ensemble, "combined_risk_score", 0.0) or 0.0,
+                    getattr(ensemble, "classification", "") or "",
+                    getattr(getattr(ensemble, "risk_level", None), "value", "")
+                    or "",
+                )
+                self._drift_recorded += 1
+            for alert in alert_summaries:
+                self.drift_monitor.record_inference(
+                    getattr(alert, "anomaly_score", 0.0) or 0.0,
+                    getattr(alert, "risk_score", 0.0) or 0.0,
+                    getattr(alert, "classification", "") or "",
+                    getattr(alert, "priority", "") or "",
+                )
+                self._drift_recorded += 1
+            if self._drift_recorded - self._drift_last_report >= DRIFT_REPORT_INTERVAL:
+                # compute_drift_report persists the report itself
+                self._drift_last_report = self._drift_recorded
+                self.drift_monitor.compute_drift_report()
+        except Exception as exc:  # noqa: BLE001 - drift must not break batches
+            logger.warning("drift_record_failed", error=str(exc))
+
+    def submit_feedback(
+        self,
+        alert_id: str,
+        action: str,
+        label: Optional[str] = None,
+        comment: Optional[str] = None,
+    ) -> int:
+        """Record analyst feedback on an alert.
+
+        Requires a feedback store; writes a governance audit event when an
+        audit logger is configured.
+        """
+        if self.feedback_store is None:
+            raise RuntimeError("Feedback store not configured")
+
+        record_id = self.feedback_store.add_feedback(
+            alert_id=alert_id,
+            analyst_action=action,
+            analyst_label=label,
+            comment=comment,
+        )
+
+        if self.audit_logger is not None:
+            try:
+                self.audit_logger.log_event(
+                    actor="analyst-ui",
+                    action=f"feedback_{action}",
+                    reason=(
+                        f"alert_id={alert_id} label={label} "
+                        f"comment={comment}"
+                    ),
+                )
+            except Exception as exc:  # noqa: BLE001 - audit must not break feedback
+                logger.warning("feedback_audit_failed", error=str(exc))
+
+        return record_id
+
+    def get_feedback_for_alert(self, alert_id: str) -> List[dict]:
+        """Return all feedback records for an alert ([] if no store)."""
+        if self.feedback_store is None:
+            return []
+        return self.feedback_store.get_feedback_by_alert(alert_id)
+
+    _DRIFT_SEVERITY_ORDER = ("NONE", "LOW", "MODERATE", "HIGH")
+
+    def get_drift_status(self) -> dict:
+        """Return current drift monitoring status for the UI."""
+        if self.drift_monitor is None:
+            return {
+                "available": False,
+                "level": None,
+                "timestamp": None,
+                "summary": None,
+            }
+        try:
+            report = self.drift_monitor.get_latest_report()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("drift_status_failed", error=str(exc))
+            return {
+                "available": True,
+                "level": None,
+                "timestamp": None,
+                "summary": None,
+            }
+        if report is None:
+            return {
+                "available": True,
+                "level": None,
+                "timestamp": None,
+                "summary": None,
+            }
+        levels = [
+            getattr(d, "value", str(d))
+            for d in (
+                getattr(report, "anomaly_drift", "NONE"),
+                getattr(report, "risk_drift", "NONE"),
+                getattr(report, "class_drift", "NONE"),
+            )
+        ]
+        level = max(
+            levels,
+            key=lambda x: (
+                self._DRIFT_SEVERITY_ORDER.index(x)
+                if x in self._DRIFT_SEVERITY_ORDER
+                else -1
+            ),
+        )
+        return {
+            "available": True,
+            "level": level,
+            "timestamp": getattr(report, "timestamp", None),
+            "summary": (
+                f"anomaly {levels[0]}, risk {levels[1]}, class {levels[2]}"
+            ),
+        }
+
     def _is_flow_record(self, entry: dict) -> bool:
         """Whether a log entry looks like a CICIDS-style flow record.
 
@@ -922,6 +1066,10 @@ class AppController:
             "batches_processed": self._batches_processed,
             "flow_records_routed": self._flow_records_routed,
             "non_flow_records": self._non_flow_records,
+            "phase2": {
+                "feedback_enabled": self.feedback_store is not None,
+                "drift_enabled": self.drift_monitor is not None,
+            },
             "deduplication": deduplication,
             "security": {
                 "strict_model_integrity": strict_model_integrity_enabled(),

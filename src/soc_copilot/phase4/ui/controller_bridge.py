@@ -215,6 +215,38 @@ class ControllerBridge(QObject):
         """Get permission check results (read-only)"""
         return self._permission_status
 
+    def submit_feedback(
+        self,
+        alert_id: str,
+        action: str,
+        label: Optional[str] = None,
+        comment: Optional[str] = None,
+    ):
+        """Record analyst feedback via the controller (if configured)."""
+        handler = getattr(self._controller, "submit_feedback", None)
+        if handler is None:
+            raise RuntimeError("Feedback store not configured")
+        return handler(alert_id, action, label=label, comment=comment)
+
+    def get_feedback_for_alert(self, alert_id: str) -> List[dict]:
+        """Get feedback records for an alert ([] when unavailable)."""
+        handler = getattr(self._controller, "get_feedback_for_alert", None)
+        if handler is None:
+            return []
+        return handler(alert_id)
+
+    def get_drift_status(self) -> Dict[str, Any]:
+        """Get drift monitoring status (read-only)."""
+        handler = getattr(self._controller, "get_drift_status", None)
+        if handler is None:
+            return {
+                "available": False,
+                "level": None,
+                "timestamp": None,
+                "summary": None,
+            }
+        return handler()
+
     def get_provider_statuses(self) -> list:
         """Get local threat-intel provider statuses (no network)."""
         from soc_copilot.mcp.provider_registry import get_provider_statuses
