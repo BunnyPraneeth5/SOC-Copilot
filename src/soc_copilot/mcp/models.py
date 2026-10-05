@@ -18,12 +18,18 @@ from pydantic import BaseModel, Field
 # =============================================================================
 
 class ThreatSeverity(str, Enum):
-    """Severity rating assigned by the ReportAgent."""
+    """Severity rating assigned by the ReportAgent.
+
+    ``UNKNOWN`` is reserved for orchestrator-generated fallback reports
+    (e.g. when online enrichment is disabled or the LLM report could not
+    be produced); the ReportAgent LLM is only allowed CRITICAL..LOW.
+    """
 
     CRITICAL = "CRITICAL"
     HIGH = "HIGH"
     MEDIUM = "MEDIUM"
     LOW = "LOW"
+    UNKNOWN = "UNKNOWN"
 
 
 class AgentStatus(str, Enum):

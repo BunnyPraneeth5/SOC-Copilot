@@ -14,7 +14,7 @@ from typing import Any, Protocol
 
 import httpx
 import structlog
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from soc_copilot.mcp.base_agent import BaseAgent
 from soc_copilot.mcp.exceptions import AgentLookupError, APIKeyMissingError
@@ -119,6 +119,16 @@ class ReportLLMResponse(BaseModel):
     recommendations: list[str]
     limitations: list[str]
     evidence: ReportEvidence
+
+    @field_validator("severity")
+    @classmethod
+    def _severity_is_llm_rated(cls, value: ThreatSeverity) -> ThreatSeverity:
+        """Keep UNKNOWN reserved for orchestrator-generated reports."""
+        if value is ThreatSeverity.UNKNOWN:
+            raise ValueError(
+                "severity must be one of CRITICAL, HIGH, MEDIUM, LOW"
+            )
+        return value
 
 
 class ReportLLMAdapter(Protocol):

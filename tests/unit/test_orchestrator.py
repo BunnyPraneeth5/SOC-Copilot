@@ -10,10 +10,20 @@ from soc_copilot.mcp.exceptions import AgentLookupError
 from soc_copilot.mcp.models import (
     AgentResult,
     AgentStatus,
+    ShodanResult,
     ThreatReport,
     ThreatSeverity,
 )
 from soc_copilot.mcp.orchestrator import MCPOrchestrator
+
+
+@pytest.fixture(autouse=True)
+def _enable_online_enrichment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep these tests on the enrichment-enabled path deterministically."""
+    monkeypatch.setattr(
+        "soc_copilot.mcp.orchestrator.online_enrichment_enabled",
+        lambda: True,
+    )
 
 
 class FakeCache:
@@ -51,12 +61,14 @@ class FakeAgent:
         raise_exc: Exception | None = None,
         status: AgentStatus = AgentStatus.SUCCESS,
         error: str | None = None,
+        data: object | None = None,
     ) -> None:
         self.agent_name = agent_name
         self.delay = delay
         self.raise_exc = raise_exc
         self.status = status
         self.error = error
+        self.data = data
         self.started = asyncio.Event()
         self.release = asyncio.Event()
         self.targets: list[str] = []
@@ -72,6 +84,7 @@ class FakeAgent:
         return AgentResult(
             agent_name=self.agent_name,
             status=self.status,
+            data=self.data,
             error=self.error,
         )
 
@@ -413,3 +426,121 @@ async def test_investigate_internal_ip_bypasses_agents_and_caches_report() -> No
     assert [agent.targets for agent in agents] == [[], [], []]
     # Verify report was cached
     assert cache.writes == [("192.168.1.22", result)]
+
+
+@pytest.mark.asyncio
+async def test_investigate_enrichment_disabled_returns_local_only_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "soc_copilot.mcp.orchestrator.online_enrichment_enabled",
+        lambda: False,
+    )
+    cache = FakeCache()
+    orchestrator = MCPOrchestrator(cache=cache)
+    agents = [
+        FakeAgent("ReconAgent"),
+        FakeAgent("ReputationAgent"),
+        FakeAgent("ShodanAgent"),
+    ]
+    orchestrator._recon = agents[0]
+    orchestrator._reputation = agents[1]
+    orchestrator._shodan = agents[2]
+    report_agent_built = False
+
+    def _build_report_agent(*args) -> FakeReportAgent:
+        nonlocal report_agent_built
+        report_agent_built = True
+        return FakeReportAgent(
+            AgentResult(agent_name="ReportAgent", status=AgentStatus.SUCCESS)
+        )
+
+    orchestrator._build_report_agent = _build_report_agent
+
+    result = await orchestrator.investigate("8.8.8.8")
+
+    assert result.target == "8.8.8.8"
+    assert result.severity == ThreatSeverity.UNKNOWN
+    assert result.llm_model is None
+    assert result.recon is None
+    assert result.reputation is None
+    assert result.shodan is None
+    assert "enrichment is disabled" in result.summary
+    assert any(
+        "SOC_COPILOT_ENABLE_ONLINE_ENRICHMENT" in item
+        for item in result.recommendations
+    )
+    assert [agent.targets for agent in agents] == [[], [], []]
+    assert report_agent_built is False
+    assert cache.writes == []
+
+
+@pytest.mark.asyncio
+async def test_investigate_enrichment_disabled_internal_ip_stays_internal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "soc_copilot.mcp.orchestrator.online_enrichment_enabled",
+        lambda: False,
+    )
+    cache = FakeCache()
+    orchestrator = MCPOrchestrator(cache=cache)
+    agents = [
+        FakeAgent("ReconAgent"),
+        FakeAgent("ReputationAgent"),
+        FakeAgent("ShodanAgent"),
+    ]
+    orchestrator._recon = agents[0]
+    orchestrator._reputation = agents[1]
+    orchestrator._shodan = agents[2]
+
+    result = await orchestrator.investigate("10.0.0.5")
+
+    assert result.severity == ThreatSeverity.LOW
+    assert "private/internal address" in result.summary
+    assert [agent.targets for agent in agents] == [[], [], []]
+    assert cache.writes == [("10.0.0.5", result)]
+
+
+@pytest.mark.asyncio
+async def test_investigate_report_agent_failure_returns_partial_report() -> (
+    None
+):
+    cache = FakeCache()
+    orchestrator = MCPOrchestrator(cache=cache)
+    shodan_data = ShodanResult(ip="8.8.8.8", open_ports=[22])
+    agents = [
+        FakeAgent("ReconAgent"),
+        FakeAgent("ReputationAgent"),
+        FakeAgent("ShodanAgent", data=shodan_data),
+    ]
+    orchestrator._recon = agents[0]
+    orchestrator._reputation = agents[1]
+    orchestrator._shodan = agents[2]
+    report_agent = FakeReportAgent(
+        AgentResult(
+            agent_name="ReportAgent",
+            status=AgentStatus.FAILED,
+            error="LLM unavailable",
+        )
+    )
+
+    async def _release_agents() -> None:
+        await asyncio.gather(*(agent.started.wait() for agent in agents))
+        for agent in agents:
+            agent.release.set()
+
+    orchestrator._build_report_agent = lambda *args: report_agent
+    releaser = asyncio.create_task(_release_agents())
+
+    result = await orchestrator.investigate("8.8.8.8")
+
+    await releaser
+    assert result.severity == ThreatSeverity.UNKNOWN
+    assert result.llm_model is None
+    assert result.shodan == shodan_data
+    assert result.recon is None
+    assert result.reputation is None
+    assert "LLM unavailable" in result.summary
+    assert "ShodanAgent" in result.summary
+    assert cache.writes == []

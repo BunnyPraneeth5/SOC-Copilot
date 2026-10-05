@@ -7,13 +7,15 @@
 ### 1. Executive Summary
 
 **What SOC Copilot is and what problem it solves:**
-SOC Copilot is a fully offline, desktop-based Security Information and Event Management (SIEM) and Intrusion Detection System (IDS) designed to provide intelligent, automated threat detection. It solves the problem of alert fatigue and complex, noisy security logs by automatically detecting anomalous behaviors and classifying explicit attacks using a hybrid machine learning model. Because it operates entirely locally, it addresses the severe privacy and compliance constraints of highly sensitive, air-gapped environments.
+SOC Copilot is a desktop-based Security Information and Event Management (SIEM) and Intrusion Detection System (IDS) built around an offline detection core with optional online threat-intelligence enrichment. It solves the problem of alert fatigue and complex, noisy security logs by automatically detecting anomalous behaviors and classifying explicit attacks using a hybrid machine learning model. Because the detection core operates entirely locally (external lookups are opt-in via `SOC_COPILOT_ENABLE_ONLINE_ENRICHMENT`), it addresses the severe privacy and compliance constraints of highly sensitive, air-gapped environments.
 
 **Who uses it and in what context:**
 SOC Copilot is built for security analysts, incident responders, and network administrators who require a fast, low-overhead, secure detection platform on local workstations. It is typically deployed in single-user or small-team contexts on dedicated hardware (Windows/macOS/Linux) where shipping logs to a cloud provider is impossible due to regulatory or security policies.
 
 **What it can do today:**
-Today, SOC Copilot successfully ingests and parses multiple log formats (CSV, JSON/JSONL, Syslog, Windows EVTX) and extracts up to 84 distinct features across statistical, temporal, behavioral, and network dimensions. It runs this data through an offline ML ensemble—using an Isolation Forest for unsupervised anomaly detection and a Random Forest (trained on CICIDS2017) for multi-class attack classification. It dedupes these findings, calculates risk scores using an Ensemble Coordinator, and presents prioritized, explainable alerts via a PyQt6 desktop GUI. It also has a foundational (though partially incomplete) Multi-Agent Cyber-investigation Pipeline (MCP) for enriching threat intelligence.
+Today, SOC Copilot successfully ingests and parses multiple log formats (CSV, JSON/JSONL, Syslog, Windows EVTX) and extracts 78 CICIDS2017 network-flow features (see `data/models/feature_order.json`) across statistical, temporal, behavioral, and network dimensions. It runs this data through an offline ML ensemble—using an Isolation Forest for unsupervised anomaly detection and a Random Forest (trained on CICIDS2017) for multi-class attack classification. It dedupes these findings, calculates risk scores using an Ensemble Coordinator, and presents prioritized, explainable alerts via a PyQt6 desktop GUI. It also has a working Multi-Agent Cyber-investigation Pipeline (MCP) for enriching threat intelligence, which degrades gracefully to local-only reports when online enrichment is disabled.
+
+Note on feature coverage: the network-flow Isolation Forest and Random Forest only see meaningful input for CICIDS-style flow records. Text and system logs are mainly handled by rule-based detection and the text-log classifier (trained via `python scripts/train_text_log_model.py`). Records without timestamps are dropped by preprocessing before they reach the ML stage.
 
 ### 2. Current Architecture
 
@@ -38,7 +40,7 @@ src/soc_copilot/
 #### Module Responsibilities
 
 - **`core/`**: Provides the foundational building blocks. It exists to guarantee structured logging (`structlog`) and uniform configuration without circular dependencies.
-- **`data/`**: Manages the ETL pipeline. `log_ingestion/` abstracts away log formats (CSV, EVTX, etc.), while `feature_engineering/` extracts 64-78 dimensional vectors required by the models. This separation allows new log formats to be added without touching the ML logic.
+- **`data/`**: Manages the ETL pipeline. `log_ingestion/` abstracts away log formats (CSV, EVTX, etc.), while `feature_engineering/` extracts the 78-dimensional vectors required by the models. This separation allows new log formats to be added without touching the ML logic.
 - **`models/`**: Houses the detection engine. `inference/` manages loading serialized `joblib` models safely, while `ensemble/coordinator.py` merges the anomaly scores and classification confidences to determine final risk severity.
 - **`mcp/`**: Contains the 4-agent investigatory pipeline (`ReconAgent`, `ReputationAgent`, `ShodanAgent`, `ReportAgent`) orchestrated by `MCPOrchestrator`. It exists to automate the manual threat intel gathering process analysts typically perform.
 - **`phase4/controller/`**: Acts as the central nervous system. The `AppController` pulls data from the ingestion layer, pushes it to the models, and stores results, decoupling the heavy lifting from the UI thread.
@@ -87,17 +89,17 @@ flowchart TD
     A[Raw Log Files] --> B[Parser Factory]
     B --> C[Preprocessing / Normalization]
     C --> D[Feature Engineering Pipeline]
-    D --> |84-dim Vector| E[Isolation Forest]
-    D --> |84-dim Vector| F[Random Forest Classifier]
+    D --> |78-dim Vector| E[Isolation Forest]
+    D --> |78-dim Vector| F[Random Forest Classifier]
     E --> |Anomaly Score| G[Ensemble Coordinator]
     F --> |Class & Confidence| G
     G --> |Risk Score > Threshold| H[Alert Generator]
     H --> I[Deduplication Window]
-    I --> J[SQLite Alert Store]
+    I --> J[In-Memory ResultStore (max 1000)]
     J --> K[PyQt6 Dashboard]
 ```
 
-- **Why it is built this way:** The bifurcated ML approach (Isolation Forest alongside Random Forest) ensures the system can detect zero-day anomalies (via IF) while retaining high-precision categorization for known threats like DDoS or BruteForce (via RF). Deduplication occurs post-generation to prevent alert storms and analyst fatigue.
+- **Why it is built this way:** The bifurcated ML approach (Isolation Forest alongside Random Forest) ensures the system can detect zero-day anomalies (via IF) while retaining high-precision categorization for known threats like DDoS or BruteForce (via RF). Deduplication occurs post-generation to prevent alert storms and analyst fatigue. Alerts are held in an in-memory `ResultStore` capped at 1000 entries (`src/soc_copilot/phase4/controller/result_store.py`); SQLite is used for governance, drift, and feedback data, not for the alert store — persistent alert storage remains open work.
 
 #### MCP Orchestrator & Async Coordination
 
@@ -109,23 +111,23 @@ The `MCPOrchestrator` uses Python's `asyncio.gather()` to run `ReconAgent`, `Rep
 
 Threat intelligence APIs are called in the `mcp` layer. `ReputationAgent` hits VirusTotal and AbuseIPDB, while `ReconAgent` handles WHOIS/GeoIP.
 
-- **Why this separation?** It limits blast radius. If VirusTotal revokes an API key, only `ReputationAgent` suffers a `PARTIAL` failure state. The `ReportAgent` then accepts these disjointed outputs (via Pydantic `BaseModel` objects) and feeds them into the Claude LLM to synthesize a final `ThreatReport`.
+- **Why this separation?** It limits blast radius. If VirusTotal revokes an API key, only `ReputationAgent` suffers a `PARTIAL` failure state. The `ReportAgent` then accepts these disjointed outputs (via Pydantic `BaseModel` objects) and feeds them into the configured OpenAI-compatible LLM provider (NVIDIA NIM or OpenRouter, selected via `REPORT_LLM_PROVIDER`) to synthesize a final `ThreatReport`. A Claude/Anthropic adapter is not yet implemented.
 
 ### 3. Component Deep Dives
 
 #### MLModel (Isolation Forest + Random Forest)
 
-- **What it does:** Scans 84-dimensional network flow data to detect anomalies and explicitly classify known attacks (DDoS, BruteForce, Malware, etc.).
+- **What it does:** Scans 78-dimensional network flow data to detect anomalies and explicitly classify known attacks (DDoS, BruteForce, Malware, etc.).
 - **Why it was built this way:** The hybrid approach balances detecting known threats (high precision, low false-positive rate via RF) and unknown zero-day anomalies (broad recall via IF).
 - **Inputs/Outputs:** Takes numerical and categorical normalized vectors. Outputs a composite Risk Score (0.0 to 1.0) and a string classification with confidence percentage.
-- **Known limitations:** `src/soc_copilot/models/inference/engine.py` (line 152) — Requires serialized `joblib` artifacts which inherently introduce supply-chain risks, hence the reliance on strict file hash verification. It can also cause high memory spikes during batch loading.
+- **Known limitations:** `src/soc_copilot/models/inference/engine.py` (line 152) — Requires serialized `joblib` artifacts which inherently introduce supply-chain risks, hence the reliance on strict file hash verification. It can also cause high memory spikes during batch loading. The IF/RF pair only produces meaningful output for CICIDS-style flow features; text/system logs are covered mainly by rule detection and the text-log classifier, and records lacking timestamps are dropped by preprocessing before reaching the models.
 
 #### MCPOrchestrator
 
 - **What it does:** Acts as the traffic cop for automated threat intelligence gathering.
 - **Why it was built this way:** To speed up analyst workflows by fetching contextual data in parallel instead of making analysts alt-tab to browser windows for lookup APIs.
 - **Inputs/Outputs:** Takes an IP address string. Outputs a structured `ThreatReport` containing recon, reputation, and Shodan data wrapped by an LLM-generated summary.
-- **Known limitations:** `src/soc_copilot/mcp/orchestrator.py` (line 55) — Currently mostly a scaffold. Lacks the full `diskcache` integration for the `ip:<target>` key format and has yet to implement the `asyncio.gather` execution logic.
+- **Known limitations:** `src/soc_copilot/mcp/orchestrator.py` — Implemented: parallel `asyncio.gather` execution and `diskcache` integration are in place (cache key format `target:<normalized>`, 6-hour TTL). Concurrent cache misses for the same target deliberately run duplicate investigations (no per-target dedupe yet).
 
 #### ReconAgent
 
@@ -139,21 +141,21 @@ Threat intelligence APIs are called in the `mcp` layer. `ReputationAgent` hits V
 - **What it does:** Queries AbuseIPDB and VirusTotal to establish the malicious reputation of an IP.
 - **Why it was built this way:** Two independent sources provide stronger confidence in malicious verdicts. Async `httpx` calls guarantee the agent completes within a strict timeout window.
 - **Inputs/Outputs:** Takes an IP string. Outputs a `ReputationResult` with an AbuseIPDB confidence score (0-100) and a VirusTotal detection ratio.
-- **Known limitations:** `src/soc_copilot/mcp/reputation_agent.py` (line 173) — Scaffold pending API key validation integration. Hard dependency on environmental variables being set correctly.
+- **Known limitations:** `src/soc_copilot/mcp/reputation_agent.py` — Implemented. Hard dependency on API key environment variables being set correctly; missing keys surface as `APIKeyMissingError`/`FAILED` results rather than crashes.
 
 #### ShodanAgent
 
 - **What it does:** Discovers exposed ports, running service banners, and known CVEs associated with an IP.
 - **Why it was built this way:** Gives analysts immediate insight into whether an attacking IP is a compromised IoT device or a known command-and-control infrastructure node.
 - **Inputs/Outputs:** Takes an IP string. Outputs a `ShodanResult` listing open ports and CVE strings.
-- **Known limitations:** `src/soc_copilot/mcp/shodan_agent.py` (line 33) — Currently just a `NotImplementedError` scaffold.
+- **Known limitations:** `src/soc_copilot/mcp/shodan_agent.py` — Implemented via the `shodan` library; requires `SHODAN_API_KEY` and network access, otherwise it returns a `FAILED`/`PARTIAL` agent result.
 
 #### ReportAgent
 
-- **What it does:** Synthesizes the raw data from the other three agents using Anthropic's Claude API.
+- **What it does:** Synthesizes the raw data from the other three agents using an OpenAI-compatible LLM provider — NVIDIA NIM or OpenRouter, selected via `REPORT_LLM_PROVIDER`. A Claude/Anthropic adapter is not implemented yet (open item).
 - **Why it was built this way:** Analysts need immediate context and actionable summaries, not just raw JSON blocks. The LLM translates raw intelligence into a severity-rated (CRITICAL/HIGH/MEDIUM/LOW) tactical assessment.
 - **Inputs/Outputs:** Takes aggregated `ReconResult`, `ReputationResult`, and `ShodanResult`. Outputs a final `ThreatReport`.
-- **Known limitations:** `src/soc_copilot/mcp/report_agent.py` (line 58) — Currently a scaffold. High latency expected (Claude API calls can take 15-30s), requiring a longer agent timeout (30s).
+- **Known limitations:** `src/soc_copilot/mcp/report_agent.py` — Implemented. High latency expected from the hosted LLM providers (calls can take 15-30s), requiring a longer agent timeout (30s).
 
 #### PyQt6 GUI
 
@@ -197,7 +199,15 @@ The following significant technical debt items have been explicitly addressed an
 4. **Scikit-learn Version Mismatch**
    - **The Problem:** The environment was failing to load serialized Random Forest models correctly because the inference environment's `scikit-learn` version drifted from the training environment's version, breaking tree node deserialization.
    - **Where it lived:** `pyproject.toml` and local virtual environments.
-   - **The Fix:** The dependency was pinned tightly to `scikit-learn>=1.3.0` in `pyproject.toml`, forcing uniform environments across developer testing and PyInstaller build pipelines.
+   - **The Fix:** A `scikit-learn>=1.3.0` minimum-version constraint was added in `pyproject.toml`, enforcing a compatible floor across developer testing and PyInstaller build pipelines.
+
+### 5a. Open Items / Known Gaps
+
+- **Persistent alert storage:** Alerts live only in the in-memory `ResultStore` (max 1000 entries); no durable alert store exists yet. SQLite is currently used for governance, drift, and feedback data only.
+- **Claude/Anthropic adapter:** `ReportAgent` supports NVIDIA NIM and OpenRouter; an Anthropic adapter behind the same `ReportLLMAdapter` interface is not implemented.
+- **Two un-unified kill switches:** Phase 3 governance uses a SQLite-backed kill switch (`phase3/governance/killswitch.py`) while Phase 4 uses a `.kill` sentinel file (`phase4/kill_switch.py`). They are not synchronized.
+- **CLI-only subsystems:** Phase 2 feedback/drift/explainer and Phase 3 governance are reachable only via the CLI; they are not wired into the PyQt6 UI.
+- **UI domain investigations:** The orchestrator supports domains, but the alerts-table double-click only reads the source-IP column.
 
 ---
 
@@ -209,14 +219,14 @@ In the next 12 months, SOC Copilot must transition from a purely reactive analys
 
 **Scope Guardrails (What it will NOT become):**
 
-- **A cloud-based SaaS:** SOC Copilot will remain strictly offline and desktop-first. Data sovereignty is the primary value proposition.
+- **A cloud-based SaaS:** SOC Copilot will remain an offline detection core with optional online threat-intelligence enrichment, desktop-first. Data sovereignty is the primary value proposition.
 - **An enterprise Splunk/Elastic replacement:** It is a localized, tactical assistant, not a petabyte-scale data lake.
 - **A general-purpose AI assistant:** The LLM integration is strictly sandboxed to threat reporting; it will not answer general queries.
 - **Dependent on paid APIs for core detection:** The ML models handle core detection offline. APIs (VirusTotal, Shodan) are for enrichment only.
 
 ### 7. Milestone Roadmap (1-4 Week Sprint)
 
-The immediate priority is completing the scaffolded MCP integration. The following milestones represent a tight, phased sequence to bring automated threat investigation to the UI.
+The MCP integration and its UI binding are now implemented. The following milestones track how it was brought online and what remains (provider resilience, live visualization).
 
 #### Milestone 1: Reputation and Shodan Agent Implementation (Done 05/07/2026 08:00PM)
 
@@ -230,13 +240,13 @@ The immediate priority is completing the scaffolded MCP integration. The followi
 
 #### Milestone 2: Claude LLM Report Agent (Done 07/07/2026 11:00PM but with different LLM)
 
-- **Goal:** Connect the `ReportAgent` to the Anthropic Claude API to consume the outputs of agents 1-3 and output a structured `ThreatReport`.
+- **Goal:** Connect the `ReportAgent` to an LLM to consume the outputs of agents 1-3 and output a structured `ThreatReport`. Implemented via OpenAI-compatible adapters for NVIDIA NIM and OpenRouter (`REPORT_LLM_PROVIDER`); a Claude/Anthropic adapter remains an open item.
 - **Why it matters:** Human-readable summaries and severity ratings (CRITICAL/HIGH/MEDIUM/LOW) are required to make raw intel actionable for Tier 1 analysts.
 - **Files affected:** `src/soc_copilot/mcp/report_agent.py`.
 - **Estimated complexity:** Medium
 - **Dependencies:** Milestone 1 (needs the data outputs to build the LLM prompt).
-- **Acceptance criteria:** Agent correctly formats the `REPORT_SYSTEM_PROMPT` and parses Claude's response into the Pydantic `ThreatReport` model.
-- **Risks:** High latency from the Claude API leading to orchestrator timeouts.
+- **Acceptance criteria:** Agent correctly formats the `REPORT_SYSTEM_PROMPT` and parses the provider's response into the Pydantic `ThreatReport` model.
+- **Risks:** High latency from the hosted LLM provider leading to orchestrator timeouts.
 
 #### Milestone 3: Orchestrator Parallelization & Caching (Done 09/07/2026 02:00AM)
 
@@ -248,14 +258,15 @@ The immediate priority is completing the scaffolded MCP integration. The followi
 - **Acceptance criteria:** Orchestrator completes all 3 collection tasks in ~10 seconds. Duplicate requests within 6 hours return instantly from `diskcache`.
 - **Risks:** Thread exhaustion or unhandled exceptions in `asyncio.gather` tearing down the main loop.
 
-#### Milestone 4: PyQt6 UI Binding
+#### Milestone 4: PyQt6 UI Binding — ✅ Done
 
-- **Goal:** Bind the orchestrator to the GUI so that double-clicking an IP in the `AlertsView` triggers the investigation asynchronously.
+- **Goal:** Bind the orchestrator to the GUI so that double-clicking an IP in the `AlertsView` triggers the investigation asynchronously. Implemented: double-click on an alerts-table row calls `ControllerBridge.investigate_target`, which runs the orchestrator on a `QRunnable` inside the `QThreadPool`, then emits a `reportReady` signal that `alerts_view` renders as a modal threat report.
 - **Why it matters:** This is the actual user feature—connecting the backend pipeline to analyst interactions.
 - **Files affected:** `src/soc_copilot/phase4/ui/alerts_view.py`, `src/soc_copilot/phase4/ui/controller_bridge.py`.
 - **Estimated complexity:** High
 - **Dependencies:** Milestone 3.
-- **Acceptance criteria:** Double-clicking table column 2 (IP) fires a `QRunnable` task to the `QThreadPool`, executing the orchestrator, and emitting a custom `reportReady` Qt signal to display a modal dialogue with the `ThreatReport`. The UI must not freeze.
+- **Acceptance criteria:** Double-clicking table column 2 (IP) fires a `QRunnable` task to the `QThreadPool`, executing the orchestrator, and emitting a custom `reportReady` Qt signal to display a modal dialogue with the `ThreatReport`. The UI must not freeze. (Met.)
+- **Note:** The orchestrator supports both IPs and domains, but the UI double-click handler currently reads the source-IP column only — wiring the domain column remains open.
 - **Risks:** Executing `asyncio` loops inside Qt threads requires careful management to prevent deadlocks or segment faults.
 
 #### Milestone 5: Provider & Connectivity Layer
@@ -270,7 +281,7 @@ The immediate priority is completing the scaffolded MCP integration. The followi
   - `check_provider_status()` performs a lightweight ping/auth check per provider and caches the result briefly.
   - Orchestrator reads live provider status at dispatch time; any provider that is down or unkeyed marks its corresponding agent as `Disabled` and the pipeline continues in local-only/offline mode.
 - **Risks:** Ping checks adding latency to startup; mitigate by running checks lazily on first use and caching aggressively.
-- **Status:** Not started
+- **Status:** Not started — but the orchestrator already degrades gracefully today: it returns a local-only UNKNOWN-severity report when online enrichment is disabled, and a partial UNKNOWN-severity report when the LLM fails but at least one data agent returned data. The provider registry and status UI remain to be built.
 
 #### Milestone 6: Live Workflow Visualization (PyQt6-native)
 
@@ -293,7 +304,7 @@ The immediate priority is completing the scaffolded MCP integration. The followi
 
 ### 8. Target Architecture (with FastAPI)
 
-Once the MCP pipeline is complete, the application will introduce a FastAPI layer. This shifts the `AppController` behind an HTTP interface, allowing the PyQt6 GUI (or external tools) to communicate via standard REST/JSON, turning SOC Copilot into a true local MCP server.
+Once the MCP pipeline is complete, the application will introduce a FastAPI layer (not started). This shifts the `AppController` behind an HTTP interface, allowing the PyQt6 GUI (or external tools) to communicate via standard REST/JSON, turning SOC Copilot into a true local MCP server.
 
 ```mermaid
 flowchart TD
@@ -333,8 +344,8 @@ flowchart TD
 | Risk | Current State | What breaks if ignored | Recommended Mitigation |
 |------|---------------|------------------------|------------------------|
 | **API Rate Limiting** | ReconAgent relies on free `ipwho.is` which heavily rate limits. | Agent returns `PARTIAL` errors constantly; analysts lose GeoIP context. | Strictly enforce the 6-hour `diskcache` in the Orchestrator. Provide config options to use paid GeoIP databases if necessary. |
-| **GUI Deadlocks** | Async API calls are not yet bound to the PyQt6 interface. | If asyncio loops are run directly on the main UI thread, the application will freeze for up to 30 seconds during report generation. | Use `QThreadPool` and `QRunnable` to execute the orchestrator entirely off the main thread, communicating back strictly via `pyqtSignal`. |
-| **LLM Latency** | Claude API calls in `ReportAgent` take significant time. | Orchestrator timeouts (currently 10s) will kill the ReportAgent before it finishes. | Increase `ReportAgent` specific timeout to 30s. Stream partial UI updates to the user ("Gathering data...", "Analyzing...") so they know the system isn't hung. |
+| **GUI Deadlocks** | Async API calls are bound to the PyQt6 interface via `QThreadPool`/`QRunnable` workers and `reportReady` signals. | If asyncio loops were run directly on the main UI thread, the application would freeze for up to 30 seconds during report generation. | Keep executing the orchestrator entirely off the main thread, communicating back strictly via `pyqtSignal`. |
+| **LLM Latency** | NVIDIA NIM / OpenRouter API calls in `ReportAgent` take significant time. | Orchestrator timeouts (currently 10s) will kill the ReportAgent before it finishes. | Increase `ReportAgent` specific timeout to 30s. Stream partial UI updates to the user ("Gathering data...", "Analyzing...") so they know the system isn't hung. |
 
 ### 10. Final Recommendations
 
