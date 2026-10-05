@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 import httpx
@@ -210,43 +211,67 @@ class OpenAICompatibleReportAdapter:
             ) from exc
 
 
-def build_report_llm_adapter(timeout: float) -> ReportLLMAdapter:
-    """Build the configured LLM adapter for ReportAgent.
+@dataclass(frozen=True)
+class ReportLLMSettings:
+    """Resolved settings for the configured report LLM provider."""
+
+    provider: str
+    base_url: str
+    api_key_env: str
+    model_env: str
+    default_model: str
+
+
+def resolve_report_llm_settings() -> ReportLLMSettings:
+    """Resolve the configured report LLM provider settings from env.
 
     ``REPORT_LLM_PROVIDER`` defaults to ``nvidia_nim`` so development and demos
-    can use free-tier compatible providers. Production deployments should use a
-    Claude/Anthropic adapter behind this same interface.
+    can use free-tier compatible providers.
+
+    Raises:
+        AgentLookupError: If ``REPORT_LLM_PROVIDER`` is unsupported.
     """
     provider = os.environ.get("REPORT_LLM_PROVIDER", "nvidia_nim").lower()
 
     if provider == "nvidia_nim":
-        return OpenAICompatibleReportAdapter(
-            provider_name="nvidia_nim",
+        return ReportLLMSettings(
+            provider=provider,
             base_url=os.environ.get(
                 "NVIDIA_NIM_BASE_URL", "https://integrate.api.nvidia.com/v1"
             ),
             api_key_env="NVIDIA_API_KEY",
-            default_model="meta/llama-3.1-8b-instruct",
             model_env="NVIDIA_NIM_MODEL",
-            timeout=timeout,
+            default_model="meta/llama-3.1-8b-instruct",
         )
 
     if provider == "openrouter":
-        return OpenAICompatibleReportAdapter(
-            provider_name="openrouter",
+        return ReportLLMSettings(
+            provider=provider,
             base_url=os.environ.get(
                 "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
             ),
             api_key_env="OPENROUTER_API_KEY",
-            default_model="meta-llama/llama-3.1-8b-instruct:free",
             model_env="OPENROUTER_MODEL",
-            timeout=timeout,
+            default_model="meta-llama/llama-3.1-8b-instruct:free",
         )
 
     raise AgentLookupError(
         "ReportAgent",
         "LLMProvider",
         f"Unsupported REPORT_LLM_PROVIDER '{provider}'",
+    )
+
+
+def build_report_llm_adapter(timeout: float) -> ReportLLMAdapter:
+    """Build the configured LLM adapter for ReportAgent."""
+    settings = resolve_report_llm_settings()
+    return OpenAICompatibleReportAdapter(
+        provider_name=settings.provider,
+        base_url=settings.base_url,
+        api_key_env=settings.api_key_env,
+        default_model=settings.default_model,
+        model_env=settings.model_env,
+        timeout=timeout,
     )
 
 

@@ -41,6 +41,12 @@ from soc_copilot.mcp.reputation_agent import ReputationAgent
 from soc_copilot.mcp.shodan_agent import ShodanAgent
 from soc_copilot.mcp.report_agent import ReportAgent
 from soc_copilot.mcp.orchestrator import MCPOrchestrator
+from soc_copilot.mcp.provider_registry import (
+    ProviderState,
+    ProviderStatus,
+    check_connectivity,
+    get_provider_statuses,
+)
 
 __all__ = [
     # Models
@@ -70,4 +76,9 @@ __all__ = [
     "ReportAgent",
     # Orchestrator
     "MCPOrchestrator",
+    # Provider registry
+    "ProviderState",
+    "ProviderStatus",
+    "check_connectivity",
+    "get_provider_statuses",
 ]

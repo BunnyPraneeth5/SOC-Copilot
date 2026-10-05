@@ -10,7 +10,7 @@ from typing import Optional
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
-    QGroupBox, QGridLayout
+    QGroupBox, QGridLayout, QPushButton
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
@@ -170,7 +170,10 @@ class ConfigPanel(QWidget):
         self.kill_switch = KillSwitch(self.project_root)
         
         self._config_changed = False
+        self._provider_check_running = False
         self._init_ui()
+        if self.bridge is not None and hasattr(self.bridge, "providersChecked"):
+            self.bridge.providersChecked.connect(self._on_providers_checked)
         self._refresh_status()
     
     def _init_ui(self):
@@ -291,11 +294,65 @@ class ConfigPanel(QWidget):
         
         status_group.setLayout(status_layout)
         layout.addWidget(status_group)
-        
+
+        # Threat Intelligence Providers Section
+        providers_group = QGroupBox("Threat Intelligence Providers")
+        providers_group.setStyleSheet("""
+            QGroupBox {
+                font-weight: bold;
+                border: 1px solid #444444;
+                border-radius: 5px;
+                margin-top: 10px;
+                padding-top: 10px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+            }
+        """)
+        providers_layout = QVBoxLayout()
+        providers_layout.setSpacing(5)
+
+        self._provider_indicators = {}
+        for key, label in (
+            ("whois", "WHOIS / RDAP"),
+            ("geoip", "GeoIP (ipwho.is)"),
+            ("abuseipdb", "AbuseIPDB"),
+            ("virustotal", "VirusTotal"),
+            ("shodan", "Shodan"),
+            ("report_llm", "Report LLM"),
+        ):
+            indicator = StatusIndicator(label, "Unknown", "#888888")
+            self._provider_indicators[key] = indicator
+            providers_layout.addWidget(indicator)
+
+        self.check_providers_button = QPushButton("Check connectivity")
+        self.check_providers_button.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: #ffffff;
+                border: none;
+                border-radius: 4px;
+                padding: 6px 12px;
+                font-weight: bold;
+            }
+            QPushButton:disabled {
+                background-color: #555555;
+                color: #999999;
+            }
+        """)
+        self.check_providers_button.clicked.connect(self._on_check_providers)
+        providers_layout.addWidget(self.check_providers_button)
+
+        providers_group.setLayout(providers_layout)
+        layout.addWidget(providers_group)
+
         # Info text
         info_label = QLabel(
             "This panel shows the current configuration and system status. "
-            "Only the system logs toggle can be modified. All other indicators are read-only."
+            "Only the system logs toggle can be modified. All other indicators are read-only. "
+            "Use 'Check connectivity' to probe threat-intelligence providers (requires online enrichment)."
         )
         info_label.setStyleSheet("color: #666666; font-style: italic;")
         info_label.setWordWrap(True)
@@ -391,7 +448,80 @@ class ConfigPanel(QWidget):
             self.integrity_indicator.update_status("Unknown", "#888888")
             self.online_indicator.update_status("Disabled", "#4CAF50")
             self.noise_indicator.update_status("0 suppressed", "#2196F3")
-    
+
+        # Threat-intelligence provider statuses
+        self._refresh_providers()
+
+    _PROVIDER_STATE_COLORS = {
+        "Configured": "#4CAF50",
+        "Available": "#4CAF50",
+        "Missing key": "#FFC107",
+        "Disabled": "#666666",
+        "Offline": "#f44336",
+    }
+
+    def _refresh_providers(self):
+        """Populate provider indicators from local statuses (no network)."""
+        try:
+            if self.bridge is not None:
+                statuses = self.bridge.get_provider_statuses()
+            else:
+                from soc_copilot.mcp.provider_registry import get_provider_statuses
+                statuses = get_provider_statuses()
+        except Exception:
+            return
+        self._apply_provider_statuses(statuses)
+
+    def _apply_provider_statuses(self, statuses):
+        """Update indicators and the check button from a status list."""
+        any_usable = False
+        for status in statuses:
+            indicator = self._provider_indicators.get(status.key)
+            if indicator is None:
+                continue
+            state = status.state.value
+            text = state + (f" — {status.detail}" if status.detail else "")
+            color = self._PROVIDER_STATE_COLORS.get(state, "#888888")
+            indicator.update_status(text, color)
+            if status.usable:
+                any_usable = True
+
+        if not any_usable:
+            self.check_providers_button.setEnabled(False)
+            self.check_providers_button.setToolTip(
+                "Enable online enrichment to check providers"
+            )
+        elif not self._provider_check_running:
+            self.check_providers_button.setEnabled(True)
+            self.check_providers_button.setToolTip("")
+
+    def _on_check_providers(self):
+        """Run the connectivity probe off the UI thread."""
+        if self._provider_check_running:
+            return
+        self._provider_check_running = True
+        self.check_providers_button.setEnabled(False)
+        self.check_providers_button.setText("Checking...")
+
+        if self.bridge is not None:
+            self.bridge.check_provider_connectivity()
+        else:
+            # No bridge: probe synchronously (tests / headless usage only).
+            import asyncio
+            from soc_copilot.mcp.provider_registry import check_connectivity
+            try:
+                self._on_providers_checked(asyncio.run(check_connectivity()))
+            except Exception:
+                self._on_providers_checked(None)
+
+    def _on_providers_checked(self, statuses):
+        """Apply probe results delivered from the worker thread."""
+        self._provider_check_running = False
+        self.check_providers_button.setText("Check connectivity")
+        self.check_providers_button.setEnabled(True)
+        if statuses:
+            self._apply_provider_statuses(statuses)
+
     def refresh(self):
         """Public method to refresh status (called by timer)"""
         self._refresh_status()

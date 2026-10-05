@@ -15,6 +15,23 @@ from soc_copilot.mcp.models import (
     ThreatSeverity,
 )
 from soc_copilot.mcp.orchestrator import MCPOrchestrator
+from soc_copilot.mcp.provider_registry import ProviderState, ProviderStatus
+
+_PROVIDER_DEFS = (
+    ("whois", "WHOIS (RDAP)", "ReconAgent"),
+    ("geoip", "GeoIP (ipwho.is)", "ReconAgent"),
+    ("abuseipdb", "AbuseIPDB", "ReputationAgent"),
+    ("virustotal", "VirusTotal", "ReputationAgent"),
+    ("shodan", "Shodan", "ShodanAgent"),
+    ("report_llm", "Report LLM", "ReportAgent"),
+)
+
+
+def _all_configured_statuses() -> list[ProviderStatus]:
+    return [
+        ProviderStatus(key, name, agent, ProviderState.CONFIGURED)
+        for key, name, agent in _PROVIDER_DEFS
+    ]
 
 
 @pytest.fixture(autouse=True)
@@ -23,6 +40,10 @@ def _enable_online_enrichment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "soc_copilot.mcp.orchestrator.online_enrichment_enabled",
         lambda: True,
+    )
+    monkeypatch.setattr(
+        "soc_copilot.mcp.orchestrator.get_provider_statuses",
+        _all_configured_statuses,
     )
 
 
@@ -387,7 +408,9 @@ async def test_run_data_agents_normalizes_unexpected_gather_exceptions() -> None
             agent.release.set()
 
     releaser = asyncio.create_task(_release_agents())
-    recon, reputation, shodan = await orchestrator._run_data_agents("example.com")
+    recon, reputation, shodan = await orchestrator._run_data_agents(
+        "example.com", _all_configured_statuses()
+    )
     await releaser
 
     assert recon.status == AgentStatus.SUCCESS
@@ -544,3 +567,136 @@ async def test_investigate_report_agent_failure_returns_partial_report() -> (
     assert "LLM unavailable" in result.summary
     assert "ShodanAgent" in result.summary
     assert cache.writes == []
+
+
+def _statuses_with(**overrides) -> list[ProviderStatus]:
+    """All-CONFIGURED statuses with per-key overrides as (state, detail)."""
+    statuses = _all_configured_statuses()
+    for i, s in enumerate(statuses):
+        if s.key in overrides:
+            state, detail = overrides[s.key]
+            statuses[i] = ProviderStatus(s.key, s.display_name, s.agent, state, detail)
+    return statuses
+
+
+@pytest.mark.asyncio
+async def test_investigate_skips_shodan_when_provider_key_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "soc_copilot.mcp.orchestrator.get_provider_statuses",
+        lambda: _statuses_with(
+            shodan=(ProviderState.MISSING_KEY, "SHODAN_API_KEY not set")
+        ),
+    )
+    cache = FakeCache()
+    orchestrator = MCPOrchestrator(cache=cache)
+    agents = [
+        FakeAgent("ReconAgent"),
+        FakeAgent("ReputationAgent"),
+        FakeAgent("ShodanAgent"),
+    ]
+    orchestrator._recon = agents[0]
+    orchestrator._reputation = agents[1]
+    orchestrator._shodan = agents[2]
+    for agent in agents:
+        agent.release.set()
+    report = _report()
+    report_inputs: list[tuple[AgentResult, AgentResult, AgentResult]] = []
+
+    def _build_report_agent(
+        recon: AgentResult,
+        reputation: AgentResult,
+        shodan: AgentResult,
+    ) -> FakeReportAgent:
+        report_inputs.append((recon, reputation, shodan))
+        return FakeReportAgent(
+            AgentResult(
+                agent_name="ReportAgent",
+                status=AgentStatus.SUCCESS,
+                data=report,
+            )
+        )
+
+    orchestrator._build_report_agent = _build_report_agent
+
+    result = await orchestrator.investigate("example.com")
+
+    assert result is report
+    assert agents[0].targets == ["example.com"]
+    assert agents[1].targets == ["example.com"]
+    assert agents[2].targets == []  # ShodanAgent never ran
+    assert report_inputs[0][2].status == AgentStatus.FAILED
+    assert "Skipped" in report_inputs[0][2].error
+    assert "SHODAN_API_KEY not set" in report_inputs[0][2].error
+
+
+@pytest.mark.asyncio
+async def test_investigate_without_report_llm_returns_partial_report(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "soc_copilot.mcp.orchestrator.get_provider_statuses",
+        lambda: _statuses_with(
+            report_llm=(ProviderState.MISSING_KEY, "NVIDIA_API_KEY not set")
+        ),
+    )
+    cache = FakeCache()
+    orchestrator = MCPOrchestrator(cache=cache)
+    shodan_data = ShodanResult(ip="8.8.8.8", open_ports=[22])
+    agents = [
+        FakeAgent("ReconAgent"),
+        FakeAgent("ReputationAgent"),
+        FakeAgent("ShodanAgent", data=shodan_data),
+    ]
+    orchestrator._recon = agents[0]
+    orchestrator._reputation = agents[1]
+    orchestrator._shodan = agents[2]
+    for agent in agents:
+        agent.release.set()
+
+    report_agent_built = False
+
+    def _build_report_agent(*args) -> FakeReportAgent:
+        nonlocal report_agent_built
+        report_agent_built = True
+        return FakeReportAgent(
+            AgentResult(agent_name="ReportAgent", status=AgentStatus.SUCCESS)
+        )
+
+    orchestrator._build_report_agent = _build_report_agent
+
+    result = await orchestrator.investigate("8.8.8.8")
+
+    assert report_agent_built is False
+    assert result.severity == ThreatSeverity.UNKNOWN
+    assert result.shodan == shodan_data
+    assert "NVIDIA_API_KEY not set" in result.summary
+    assert cache.writes == []
+
+
+@pytest.mark.asyncio
+async def test_investigate_without_report_llm_and_no_data_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "soc_copilot.mcp.orchestrator.get_provider_statuses",
+        lambda: _statuses_with(
+            report_llm=(ProviderState.MISSING_KEY, "NVIDIA_API_KEY not set")
+        ),
+    )
+    cache = FakeCache()
+    orchestrator = MCPOrchestrator(cache=cache)
+    agents = [
+        FakeAgent("ReconAgent"),
+        FakeAgent("ReputationAgent"),
+        FakeAgent("ShodanAgent"),
+    ]
+    orchestrator._recon = agents[0]
+    orchestrator._reputation = agents[1]
+    orchestrator._shodan = agents[2]
+    for agent in agents:
+        agent.release.set()
+
+    with pytest.raises(AgentLookupError, match="NVIDIA_API_KEY not set"):
+        await orchestrator.investigate("example.com")

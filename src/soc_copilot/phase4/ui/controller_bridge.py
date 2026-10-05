@@ -55,10 +55,34 @@ class InvestigationWorker(QRunnable):
         self.signals.reportReady.emit(self.target, report, error)
 
 
+class ProviderCheckSignals(QObject):
+    """Per-task signal carrier for a connectivity probe."""
+
+    providersChecked = pyqtSignal(object)  # list[ProviderStatus] | None
+
+
+class ProviderCheckWorker(QRunnable):
+    """Probe provider connectivity off the UI thread."""
+
+    def __init__(self, signals: ProviderCheckSignals) -> None:
+        super().__init__()
+        self.signals = signals
+
+    def run(self) -> None:
+        try:
+            from soc_copilot.mcp.provider_registry import check_connectivity
+
+            result = asyncio.run(check_connectivity())
+        except Exception:
+            result = None
+        self.signals.providersChecked.emit(result)
+
+
 class ControllerBridge(QObject):
     """Adapter for UI to access AppController with file upload support and status reporting"""
 
     reportReady = pyqtSignal(str, object, object)  # target, ThreatReport | None, InvestigationError | None
+    providersChecked = pyqtSignal(object)  # list[ProviderStatus] | None
     
     def __init__(self, controller: AppController):
         super().__init__()
@@ -190,6 +214,29 @@ class ControllerBridge(QObject):
     def get_permission_status(self) -> Dict[str, Any]:
         """Get permission check results (read-only)"""
         return self._permission_status
+
+    def get_provider_statuses(self) -> list:
+        """Get local threat-intel provider statuses (no network)."""
+        from soc_copilot.mcp.provider_registry import get_provider_statuses
+        return get_provider_statuses()
+
+    def check_provider_connectivity(self) -> None:
+        """Probe provider connectivity off the UI thread.
+
+        Emits ``providersChecked`` with the resulting status list (or None
+        on failure).
+        """
+        signals = ProviderCheckSignals()
+        worker = ProviderCheckWorker(signals)
+        signals.providersChecked.connect(self._on_providers_checked)
+        # Keep the signal carrier alive until the worker finishes.
+        self._provider_check = (signals, worker)
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_providers_checked(self, result) -> None:
+        """Relay the probe result and release the worker."""
+        self._provider_check = None
+        self.providersChecked.emit(result)
     
     def get_total_alert_count(self) -> int:
         """Get total stored alert count"""

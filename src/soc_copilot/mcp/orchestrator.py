@@ -26,6 +26,10 @@ from soc_copilot.mcp.models import (
     ThreatSeverity,
 )
 from soc_copilot.security.network import is_internal_ip, online_enrichment_enabled
+from soc_copilot.mcp.provider_registry import (
+    ProviderStatus,
+    get_provider_statuses,
+)
 from soc_copilot.mcp.recon_agent import ReconAgent
 from soc_copilot.mcp.reputation_agent import ReputationAgent
 from soc_copilot.mcp.shodan_agent import ShodanAgent
@@ -61,17 +65,60 @@ class MCPOrchestrator:
             default_ttl=self.cache_ttl,
         )
 
-    async def _run_data_agents(self, target: str) -> tuple[
+    async def _run_data_agents(
+        self,
+        target: str,
+        statuses: list[ProviderStatus],
+    ) -> tuple[
         AgentResult,
         AgentResult,
         AgentResult,
     ]:
-        """Run Recon, Reputation, and Shodan concurrently."""
+        """Run Recon, Reputation, and Shodan concurrently.
+
+        Agents whose providers are all unusable (missing keys, disabled)
+        are skipped and get a FAILED result without calling safe_execute.
+        """
+        usable = {s.key for s in statuses if s.usable}
+        detail = {s.key: s for s in statuses}
+
+        def _skip_error(keys: tuple[str, ...]) -> str:
+            parts = [
+                detail[k].detail or detail[k].state.value
+                for k in keys
+                if k in detail
+            ]
+            return "Skipped: " + "; ".join(parts)
+
         agent_names = ("ReconAgent", "ReputationAgent", "ShodanAgent")
+        agents = (self._recon, self._reputation, self._shodan)
+        run_flags = (
+            True,  # ReconAgent always runs (whois/geoip need no key)
+            "abuseipdb" in usable or "virustotal" in usable,
+            "shodan" in usable,
+        )
+        skip_errors = (
+            "",
+            _skip_error(("abuseipdb", "virustotal")),
+            _skip_error(("shodan",)),
+        )
+
+        async def _run_or_skip(agent, agent_name, run, skip_error) -> AgentResult:
+            if run:
+                return await agent.safe_execute(target)
+            return AgentResult(
+                agent_name=agent_name,
+                status=AgentStatus.FAILED,
+                error=skip_error or "Skipped: provider not usable",
+            )
+
         results = await asyncio.gather(
-            self._recon.safe_execute(target),
-            self._reputation.safe_execute(target),
-            self._shodan.safe_execute(target),
+            *(
+                _run_or_skip(agent, name, run, skip_error)
+                for agent, name, run, skip_error in zip(
+                    agents, agent_names, run_flags, skip_errors, strict=True
+                )
+            ),
             return_exceptions=True,
         )
 
@@ -177,9 +224,13 @@ class MCPOrchestrator:
                 "Agents that returned data: " + ", ".join(returned) + "."
             )
         if failed:
+            failed_details = ", ".join(
+                f"{name}: {results[name].error or 'no data'}"
+                for name in failed
+            )
             summary_parts.append(
                 "Agents that failed or returned no data: "
-                + ", ".join(failed)
+                + failed_details
                 + "."
             )
         return ThreatReport(
@@ -237,20 +288,40 @@ class MCPOrchestrator:
         if not online_enrichment_enabled():
             return self._build_local_only_report(target)
 
+        # Local provider statuses (no probing) drive agent dispatch.
+        statuses = get_provider_statuses()
+        usable = {s.key for s in statuses if s.usable}
+
         # TODO: Concurrent cache misses for the same target deliberately run
         # duplicate investigations in this milestone instead of sharing one
         # in-flight task. Add per-target dedupe only if upstream API load
         # becomes a real product issue.
-        recon, reputation, shodan = await self._run_data_agents(target)
-        report_agent = self._build_report_agent(recon, reputation, shodan)
-        report_result = await report_agent.safe_execute(target)
+        recon, reputation, shodan = await self._run_data_agents(target, statuses)
 
-        if (
-            report_result.status == AgentStatus.SUCCESS
-            and isinstance(report_result.data, ThreatReport)
-        ):
-            self._cache.set_report(target, report_result.data)
-            return report_result.data
+        if "report_llm" in usable:
+            report_agent = self._build_report_agent(recon, reputation, shodan)
+            report_result = await report_agent.safe_execute(target)
+
+            if (
+                report_result.status == AgentStatus.SUCCESS
+                and isinstance(report_result.data, ThreatReport)
+            ):
+                self._cache.set_report(target, report_result.data)
+                return report_result.data
+
+            report_error = (
+                report_result.error or "ReportAgent did not produce a ThreatReport"
+            )
+        else:
+            llm_status = next(
+                (s for s in statuses if s.key == "report_llm"), None
+            )
+            report_error = (
+                "Skipped: "
+                + (llm_status.detail or llm_status.state.value)
+                if llm_status is not None
+                else "Skipped: report LLM provider not usable"
+            )
 
         data_types = (ReconResult, ReputationResult, ShodanResult)
         if any(
@@ -262,11 +333,11 @@ class MCPOrchestrator:
                 recon,
                 reputation,
                 shodan,
-                report_result.error or "ReportAgent did not produce a ThreatReport",
+                report_error,
             )
 
         raise AgentLookupError(
             "MCPOrchestrator",
             "ReportAgent",
-            report_result.error or "ReportAgent did not produce a ThreatReport",
+            report_error,
         )

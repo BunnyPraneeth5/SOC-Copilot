@@ -271,6 +271,17 @@ Examples:
     killswitch_parser.add_argument("--actor", default="cli", help="Actor name")
     killswitch_parser.add_argument("--reason", default="", help="Reason for the change")
 
+    # Threat-intelligence provider status
+    providers_parser = subparsers.add_parser(
+        "providers",
+        help="Show threat-intelligence provider status",
+    )
+    providers_parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Probe provider connectivity (contacts provider hosts)",
+    )
+
     return parser
 
 
@@ -1046,6 +1057,29 @@ def cmd_killswitch(args) -> int:
     return 0
 
 
+def cmd_providers(args) -> int:
+    """Run providers command — threat-intel provider status table."""
+    from dotenv import load_dotenv
+    load_dotenv(Path.cwd() / ".env")
+
+    from soc_copilot.mcp.provider_registry import (
+        check_connectivity,
+        get_provider_statuses,
+    )
+
+    if args.check:
+        import asyncio
+        statuses = asyncio.run(check_connectivity())
+    else:
+        statuses = get_provider_statuses()
+
+    print(f"{'Provider':<18} {'Agent':<16} {'State':<12} Detail")
+    print("-" * 72)
+    for s in statuses:
+        print(f"{s.display_name:<18} {s.agent:<16} {s.state.value:<12} {s.detail}")
+    return 0
+
+
 def main() -> int:
     """Main entry point."""
     for stream in (sys.stdout, sys.stderr):
@@ -1076,6 +1110,8 @@ def main() -> int:
         return cmd_system_logs(args)
     elif args.command == "killswitch":
         return cmd_killswitch(args)
+    elif args.command == "providers":
+        return cmd_providers(args)
     
     return 0
 
