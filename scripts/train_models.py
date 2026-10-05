@@ -5,6 +5,7 @@ This script trains both Isolation Forest and Random Forest models
 using Kaggle datasets. It is designed to be run offline/manually.
 
 Usage:
+    python scripts/train_models.py
     python scripts/train_models.py --dataset CICIDS2017
     python scripts/train_models.py --dataset CICIDS2017 --test-size 0.2
 
@@ -29,6 +30,7 @@ from soc_copilot.models.training.data_loader import (
     DataLoaderConfig,
 )
 from soc_copilot.core.logging import get_logger
+from soc_copilot.security.model_integrity import REQUIRED_MODEL_FILES, update_manifest
 
 logger = get_logger(__name__)
 
@@ -50,8 +52,11 @@ def parse_args():
     parser.add_argument(
         "--dataset",
         type=str,
-        required=True,
-        help="Name of the dataset directory under data/datasets/kaggle/",
+        default=None,
+        help=(
+            "Name of the dataset directory under data/datasets/kaggle/ "
+            "(optional if exactly one dataset is present)"
+        ),
     )
     
     parser.add_argument(
@@ -113,10 +118,17 @@ def main():
     datasets = loader.list_datasets()
     if not datasets:
         print("ERROR: No datasets found in data/datasets/kaggle/")
-        print("Please download and extract Kaggle datasets first.")
+        print("Download CICIDS2017 (MachineLearningCVE CSVs) and extract them to")
+        print("  data/datasets/kaggle/CICIDS2017/")
         sys.exit(1)
     
     print(f"Available datasets: {datasets}")
+    
+    if args.dataset is None:
+        if len(datasets) != 1:
+            print("ERROR: Multiple datasets found; choose one with --dataset <name>")
+            sys.exit(1)
+        args.dataset = datasets[0]
     
     if args.dataset not in datasets:
         print(f"ERROR: Dataset '{args.dataset}' not found.")
@@ -221,6 +233,10 @@ def main():
     
     # Save label mapping
     loader.save_label_mapping(Path(args.output_dir) / "label_map.json")
+    
+    # Record hashes of the freshly trained artifacts so integrity checks pass
+    update_manifest(args.output_dir, REQUIRED_MODEL_FILES)
+    print(f"Model integrity manifest updated: {args.output_dir}/model_hashes.json")
     
     # =========================================================================
     # Summary

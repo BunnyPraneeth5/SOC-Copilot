@@ -15,7 +15,10 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from pathlib import Path
+
 from models.text_log_classifier.text_log_classifier import train_and_save
+from soc_copilot.security.model_integrity import update_manifest
 
 
 def main():
@@ -58,7 +61,11 @@ def main():
           f"{report['weighted avg']['recall']:>10.4f} "
           f"{report['weighted avg']['f1-score']:>10.4f}")
 
+    output = Path(output_path)
+    update_manifest(output.parent, [output.name])
+
     print(f"\n  Model saved to: {output_path}")
+    print(f"  Integrity manifest updated: {output.parent / 'model_hashes.json'}")
     print("=" * 60)
 
 

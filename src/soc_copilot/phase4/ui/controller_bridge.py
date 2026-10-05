@@ -209,7 +209,7 @@ class ControllerBridge(QObject):
                 with self._process_lock:
                     self._controller.process_batch(records)
                     self._sources_added += 1
-                    self._controller._sources_count = self._sources_added
+                    self._controller.set_sources_count(self._sources_added)
             return True
         except Exception:
             return False

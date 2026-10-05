@@ -25,6 +25,7 @@ from .input_validator import (
 from .network import (
     env_flag,
     is_external_ip,
+    is_internal_ip,
     online_enrichment_enabled,
 )
 
@@ -33,6 +34,7 @@ from .model_integrity import (
     verify_model_file,
     generate_manifest,
     save_manifest,
+    update_manifest,
     IntegrityResult,
 )
 
@@ -51,11 +53,13 @@ __all__ = [
     "ValidationResult",
     "env_flag",
     "is_external_ip",
+    "is_internal_ip",
     "online_enrichment_enabled",
     # Model integrity
     "verify_models",
     "verify_model_file",
     "generate_manifest",
     "save_manifest",
+    "update_manifest",
     "IntegrityResult",
 ]

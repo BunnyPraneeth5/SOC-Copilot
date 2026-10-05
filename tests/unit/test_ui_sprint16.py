@@ -218,6 +218,7 @@ class TestUIIntegration:
     def test_no_backend_modification(self):
         """Verify UI does not modify backend"""
         controller = Mock()
+        controller.get_stats.return_value = {}
         bridge = ControllerBridge(controller)
         
         # All bridge methods should be read-only

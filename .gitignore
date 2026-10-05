@@ -58,6 +58,7 @@ htmlcov/
 # ========================
 data/datasets/
 data/models/*.joblib
+data/models/model_hashes.json
 data/models_backup/*.joblib
 data/drift/*.db
 data/feedback/*.db
@@ -79,6 +80,7 @@ dist/
 build/
 installer/output/
 *.spec
+!soc_copilot.spec
 *.whl
 
 # ========================

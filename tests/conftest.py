@@ -1,7 +1,16 @@
 """Pytest configuration for Qt tests"""
 
+import os
 import pytest
 import sys
+
+
+@pytest.fixture(autouse=True)
+def _isolate_soc_copilot_env(monkeypatch):
+    """Keep a developer's local SOC_COPILOT_* settings from leaking into tests."""
+    for name in list(os.environ):
+        if name.startswith("SOC_COPILOT_"):
+            monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture(scope="session")

@@ -38,7 +38,9 @@ dependencies = [
     # Log Parsing
     "python-evtx>=0.8.0",
 
-    # MCP cache
+    # MCP agents & cache
+    "httpx>=0.27.0",
+    "ipwhois>=1.2.0",
     "diskcache>=5.6.3",
 
     # Desktop UI (Phase-1: minimal)
@@ -47,12 +49,14 @@ dependencies = [
     # Utilities
     "structlog>=23.1.0",
     "python-dateutil>=2.8.0",
+    "python-dotenv>=1.0.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.4.0",
     "pytest-cov>=4.1.0",
+    "pytest-asyncio>=0.23.0",
     "black>=23.7.0",
     "ruff>=0.0.280",
     "mypy>=1.4.0",
@@ -63,7 +67,7 @@ build = [
 ]
 
 [project.scripts]
-soc-copilot = "soc_copilot.main:main"
+soc-copilot = "soc_copilot.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -65,7 +65,7 @@ test-coverage: ## Run tests with HTML coverage report
 # ---- Code Quality ----
 
 lint: ## Run all code quality checks
-	ruff src/ tests/
+	ruff check src/ tests/
 	mypy src/
 
 format: ## Format code with black
@@ -81,9 +81,6 @@ build: ## Build standalone executable with PyInstaller
 
 # ---- Cleanup ----
 
-clean: ## Remove build artifacts and caches
-	rm -rf build/ dist/ *.egg-info
-	rm -rf __pycache__ src/**/__pycache__ tests/**/__pycache__
-	rm -rf .pytest_cache .mypy_cache .ruff_cache htmlcov
-	rm -rf *.pyc *.pyo
+clean: ## Remove build artifacts and caches (cross-platform)
+	python -c "import shutil, pathlib; [shutil.rmtree(p, ignore_errors=True) for pat in ('build', 'dist', '*.egg-info', 'src/*.egg-info', '.pytest_cache', '.mypy_cache', '.ruff_cache', 'htmlcov', '**/__pycache__') for p in pathlib.Path('.').glob(pat) if 'venv' not in p.parts]"
 	@echo "Cleaned all build artifacts."

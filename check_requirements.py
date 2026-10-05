@@ -62,6 +62,10 @@ def check_dependencies():
         ("structlog", "structlog", "Structured logging"),
         ("joblib", "joblib", "Model serialization"),
         ("python-dateutil", "dateutil", "Date parsing"),
+        ("python-dotenv", "dotenv", "Environment file loading"),
+        ("httpx", "httpx", "HTTP client for enrichment agents"),
+        ("ipwhois", "ipwhois", "WHOIS/ASN lookups"),
+        ("diskcache", "diskcache", "Investigation result cache"),
         ("python-evtx", "Evtx", "Windows event log parsing")
     ]
     

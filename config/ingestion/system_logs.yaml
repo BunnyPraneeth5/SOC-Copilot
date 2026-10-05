@@ -1,4 +1,4 @@
-enabled: false
+enabled: true
 export_interval: 5
 log_types:
 - windows_security

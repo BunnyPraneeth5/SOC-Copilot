@@ -10,7 +10,7 @@
 ;   iscc installer/installer.iss
 ;
 ; Output:
-;   dist/SOC_Copilot_Setup_0.1.0.exe
+;   dist/SOC_Copilot_Setup_1.0.0-beta.1.exe
 
 #define MyAppName "SOC Copilot"
 #define MyAppVersion "1.0.0-beta.1"

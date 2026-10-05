@@ -10,9 +10,6 @@ from dotenv import load_dotenv
 # Add project root to path
 project_root = Path(__file__).parent
 
-# Load environment variables from .env
-load_dotenv(project_root / ".env")
-
 sys.path.insert(0, str(project_root / "src"))
 sys.path.insert(0, str(project_root))
 
@@ -190,7 +187,8 @@ def main():
         
         # Set application properties
         app.setApplicationName("SOC Copilot")
-        app.setApplicationVersion("1.0.0-beta.1")
+        from soc_copilot import __version__
+        app.setApplicationVersion(__version__)
         app.setOrganizationName("SOC Copilot Team")
         
         # Handle high DPI displays
@@ -371,6 +369,9 @@ def start_system_log_ingestion(controller, kill_switch, project_root: Path):
 
 
 if __name__ == "__main__":
+    # Load environment variables from .env (startup only, not on import)
+    load_dotenv(project_root / ".env")
+
     # Auto-request admin if not elevated — needed for Windows Event Log access
     if sys.platform == "win32" and not is_admin():
         print("SOC Copilot needs administrator rights to read Windows Event Logs.")

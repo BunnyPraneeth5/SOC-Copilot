@@ -17,6 +17,8 @@ import json
 from pathlib import Path
 from datetime import datetime
 
+import yaml
+
 # Add project root to path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root / "src"))
@@ -43,6 +45,9 @@ def setup_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  Launch the desktop UI (default when no command is given):
+    soc-copilot ui
+
   Analyze a single log file:
     python -m soc_copilot.cli analyze logs/access.log
 
@@ -58,6 +63,8 @@ Examples:
     )
     
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    subparsers.add_parser("ui", help="Launch the desktop UI")
     
     # Analyze command
     analyze_parser = subparsers.add_parser(
@@ -695,7 +702,8 @@ def cmd_status(args) -> int:
     if label_map.exists():
         with open(label_map) as f:
             data = json.load(f)
-        print(f"Classes: {', '.join(data.get('classes', []))}")
+        classes = data.get("classes") or data.get("soc_labels", [])
+        print(f"Classes: {', '.join(classes)}")
     
     # Try to load pipeline
     try:
@@ -896,6 +904,7 @@ def cmd_system_logs(args) -> int:
     """Run system-logs command (Sprint-17)."""
     config = SystemLogConfig()
     db_path = "data/governance/governance.db"
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     
     if args.system_logs_command == "status":
         # Show system log ingestion status
@@ -987,9 +996,9 @@ def main() -> int:
     parser = setup_parser()
     args = parser.parse_args()
     
-    if args.command is None:
-        parser.print_help()
-        return 0
+    if args.command in (None, "ui"):
+        from soc_copilot.main import main as launch_ui
+        return launch_ui()
     
     if args.command == "analyze":
         return cmd_analyze(args)

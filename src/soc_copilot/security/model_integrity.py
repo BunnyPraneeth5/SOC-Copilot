@@ -28,6 +28,10 @@ REQUIRED_MODEL_FILES = [
     "label_map.json",
 ]
 
+OPTIONAL_MODEL_FILES = [
+    "text_log_rf_v1.joblib",
+]
+
 
 @dataclass
 class IntegrityResult:
@@ -75,6 +79,10 @@ def generate_manifest(models_dir: str | Path) -> dict[str, str]:
             logger.info("model_hash_generated", file=filename, hash=file_hash[:16] + "...")
         else:
             logger.warning("model_file_missing_for_manifest", file=filename)
+    for filename in OPTIONAL_MODEL_FILES:
+        filepath = models_path / filename
+        if filepath.exists():
+            manifest[filename] = compute_file_hash(filepath)
     return manifest
 
 
@@ -93,6 +101,23 @@ def save_manifest(models_dir: str | Path, manifest: Optional[dict[str, str]] = N
 
     logger.info("manifest_saved", path=str(manifest_path), file_count=len(manifest))
     return manifest_path
+
+
+def update_manifest(models_dir: str | Path, filenames: list[str]) -> Path:
+    """Re-hash only the given files, keeping all other manifest entries.
+
+    Call this after training writes new artifacts, so retraining one model
+    never silently re-approves other (possibly modified) files.
+    """
+    models_path = Path(models_dir)
+    manifest = load_manifest(models_path) or {}
+    for filename in filenames:
+        filepath = models_path / filename
+        if filepath.exists():
+            manifest[filename] = compute_file_hash(filepath)
+        else:
+            manifest.pop(filename, None)
+    return save_manifest(models_path, manifest)
 
 
 def load_manifest(models_dir: str | Path) -> Optional[dict[str, str]]:

@@ -120,11 +120,12 @@ Before ML inference, a deterministic rules engine scans for obvious threat patte
 
 | Rule | Condition | Priority |
 |------|-----------|----------|
-| Brute Force (Critical) | `LoginAttempt` ≥ 10 attempts from external IP | P1-Critical |
-| Brute Force (High) | `LoginAttempt` ≥ 5 attempts | P1/P2 |
-| Malware Execution | `FileExecution` with `.exe` or `payload` | P1-Critical |
-| Data Exfiltration (Critical) | `DataTransfer` > 2GB to external IP | P1-Critical |
-| Data Exfiltration (High) | `DataTransfer` > 500MB to external IP | P2-High |
+| Brute Force (Critical) | `LoginAttempt` ≥ 10 attempts from external IP | P0-Critical |
+| Brute Force (High) | `LoginAttempt` ≥ 5 attempts | P0-Critical (external) / P1-High (internal) |
+| Malware Execution | `FileExecution` with `.exe` or `payload` | P0-Critical |
+| Data Exfiltration (Critical) | `DataTransfer` > 2GB to external IP | P0-Critical |
+| Data Exfiltration (High) | `DataTransfer` > 500MB to external IP | P1-High |
+| Privilege Escalation | `PrivilegeEscalation` granting `admin`/`root` | P0-Critical |
 
 ### Stage 5: ML Inference & Ensemble Scoring
 Each feature vector passes through both ML models in parallel:
@@ -134,17 +135,19 @@ Each feature vector passes through both ML models in parallel:
    - High scores = rare/anomalous behavior
 2. **Random Forest** → Attack classification + confidence
    - Supervised: trained on labeled CICIDS2017 data
-   - Classifies into: Benign, DoS, DDoS, PortScan, BruteForce, Botnet, Infiltration, Web Attack
+   - Classifies into 5 SOC labels: Benign, DDoS, BruteForce, Malware, Exfiltration (raw CICIDS2017 labels are mapped via `data/models/label_map.json`)
+
+> **Note:** these network-flow models expect the 78 CICIDS2017 flow features listed in `data/models/feature_order.json`. Text and system logs do not contain those fields, so for them detection relies on the text-log classifier and the rule engine.
 
 The **Ensemble Coordinator** combines both signals using configurable weights:
 ```
-Risk Score = (IF_weight × anomaly_score) + (RF_weight × classification_confidence) + (context_weight × context_score)
+Risk Score = (anomaly_weight × anomaly_score) + (classification_weight × classification_contribution)
 ```
-Default weights: IF = 0.4, RF = 0.4, Context = 0.2
+Default weights: anomaly = 0.4, classification = 0.6
 
 ### Stage 6: Alert Generation & Deduplication
 High-risk results generate alerts with:
-- **Priority level**: P1-Critical (≥0.85), P2-High (≥0.70), P3-Medium (≥0.50), P4-Low (≥0.30)
+- **Priority level** (from combined risk): P0-Critical (≥0.80), P1-High (≥0.65 for Malware/Exfiltration), P2-Medium (≥0.65), P3-Low (≥0.45 with confidence ≥0.70), otherwise P4-Info. Alerts are raised for P2-Medium and above.
 - **Human-readable reasoning**: Explains *why* the alert was triggered
 - **Suggested action**: Recommends concrete remediation steps
 - **Deduplication**: Groups related alerts within a 5-minute window by source IP, destination IP, and attack class
@@ -201,11 +204,17 @@ python setup_project.py
 python check_requirements.py
 
 # 5. Train ML models (required on first run)
+#    Network-flow models need the CICIDS2017 CSVs extracted to
+#    data/datasets/kaggle/CICIDS2017/ (the dataset is not included in the repo)
 python scripts/train_models.py
+#    Text-log classifier (synthetic training data, no download needed)
+python scripts/train_text_log_model.py
 
 # 6. Launch the application
 python launch_ui.py
 ```
+
+Both training scripts update `data/models/model_hashes.json`, which the app uses to verify model files before loading them.
 
 ### Manual Installation
 
@@ -223,6 +232,7 @@ mkdir -p data/models data/logs logs/system
 
 # Train models
 python scripts/train_models.py
+python scripts/train_text_log_model.py
 
 # Launch
 python launch_ui.py
@@ -230,11 +240,7 @@ python launch_ui.py
 
 ### CLI Entry Point
 
-After installation, you can also launch via the command line:
-
-```bash
-soc-copilot
-```
+After installation, `soc-copilot` launches the desktop UI when run with no command (same as `soc-copilot ui`). Other commands: `analyze`, `status`, `feedback`, `drift`, `calibrate`, `governance`, `system-logs` (run `soc-copilot --help`).
 
 ---
 
@@ -332,11 +338,7 @@ SOC-Copilot/
 │   │       ├── behavioral_features.py    # 10 behavioral features
 │   │       └── network_features.py       # 12 network features
 │   │
-│   ├── models/                       # Machine Learning layer
-│   │   ├── isolation_forest/         # Unsupervised anomaly detection
-│   │   │   └── trainer.py            # IsolationForestTrainer + config
-│   │   ├── random_forest/            # Supervised attack classification
-│   │   │   └── trainer.py            # RandomForestTrainer + config
+│   ├── models/                       # Machine Learning layer (inference side)
 │   │   ├── ensemble/                 # Ensemble scoring & coordination
 │   │   │   ├── coordinator.py        # Combines IF + RF scores
 │   │   │   ├── pipeline.py           # AnalysisPipeline (load, analyze)
@@ -349,7 +351,14 @@ SOC-Copilot/
 │   │   └── __init__.py               # Alert engine, context enrichment (extensible)
 │   │
 │   ├── security/                     # Security & permissions
-│   │   └── permissions.py            # OS-level permission checks
+│   │   ├── permissions.py            # OS-level permission checks
+│   │   ├── input_validator.py        # Path/file validation
+│   │   ├── model_integrity.py        # SHA-256 model hash manifest
+│   │   └── network.py                # IP classification, online-enrichment flag
+│   │
+│   ├── mcp/                          # Optional online threat-intel investigation agents
+│   │   ├── orchestrator.py           # Runs Recon/Reputation/Shodan, then ReportAgent
+│   │   └── *_agent.py                # Individual agents (disabled unless opted in)
 │   │
 │   ├── phase4/                       # Real-time processing engine
 │   │   ├── kill_switch.py            # Emergency stop mechanism
@@ -381,19 +390,20 @@ SOC-Copilot/
 │   │
 │   └── ui/                           # Legacy/alternate UI components
 │
-├── models/                           # Trained model artifacts
-│   ├── random_forest/                # random_forest_v1.joblib
-│   └── isolation_forest/             # isolation_forest_v1.joblib
+├── models/                           # Model training code (artifacts go to data/models/)
+│   ├── isolation_forest/trainer.py   # IsolationForestTrainer + config
+│   ├── random_forest/trainer.py      # RandomForestTrainer + config
+│   └── text_log_classifier/          # Text log Random Forest classifier
 │
 ├── data/                             # Runtime data directory
-│   ├── datasets/                     # Training datasets (CICIDS2017)
-│   ├── models/                       # Model storage (joblib files)
+│   ├── datasets/                     # Training datasets (download separately, gitignored)
+│   ├── models/                       # Trained models, feature order, label map, hash manifest
 │   ├── models_backup/                # Model backups
 │   ├── logs/                         # Ingested logs
 │   ├── ioc_database/                 # Indicators of Compromise
-│   ├── drift/                        # Model drift monitoring
-│   ├── feedback/                     # Analyst feedback storage
-│   └── governance/                   # Audit & compliance data
+│   ├── drift/                        # Model drift monitoring (created at runtime)
+│   ├── feedback/                     # Analyst feedback storage (created at runtime)
+│   └── governance/                   # Audit & compliance data (created at runtime)
 │
 ├── config/                           # Configuration files (YAML)
 │   ├── thresholds.yaml               # Alert thresholds & priority scoring
@@ -404,8 +414,9 @@ SOC-Copilot/
 │       └── system_logs.yaml          # System log monitoring config
 │
 ├── scripts/                          # Utility scripts
-│   ├── train_models.py               # Model training pipeline
-│   ├── build_exe.py                  # PyInstaller build script
+│   ├── train_models.py               # Network-flow model training (CICIDS2017)
+│   ├── train_text_log_model.py       # Text log classifier training
+│   ├── build_exe.py                  # PyInstaller build script (uses soc_copilot.spec)
 │   ├── generate_assets.py            # Asset generation
 │   └── exporters/                    # Data export utilities
 │
@@ -429,10 +440,10 @@ SOC-Copilot/
 ├── logs/                             # Application logs directory
 ├── installer/                        # Installer artifacts
 ├── launch_ui.py                      # UI launcher script
-├── setup_project.py                          # Automated setup script
+├── setup_project.py                  # Automated setup script
 ├── check_requirements.py             # System requirements checker
 ├── pyproject.toml                    # Project metadata & dependencies
-├── sample_logs.jsonl                 # Sample log data for testing
+├── soc_copilot.spec                  # PyInstaller build specification
 ├── LICENSE                           # MIT License
 └── README.md                         # This file
 ```
@@ -511,18 +522,15 @@ Production model bundles should include `data/models/model_hashes.json` generate
 
 ### ML-Based Detection (Network Flow Data)
 
-Trained on the **CICIDS2017** dataset, the ML pipeline classifies:
+Trained on the **CICIDS2017** dataset, the ML pipeline maps raw dataset labels to 5 SOC classes (see `data/models/label_map.json`):
 
-| Attack Type | Description |
-|-------------|-------------|
-| **Benign** | Normal network traffic |
-| **DoS** | Denial of Service attacks (Hulk, GoldenEye, Slowloris, Slowhttptest) |
-| **DDoS** | Distributed Denial of Service |
-| **PortScan** | Network reconnaissance via port scanning |
-| **BruteForce** | FTP/SSH credential brute forcing |
-| **Botnet** | Bot-controlled traffic patterns |
-| **Infiltration** | Network infiltration attempts |
-| **Web Attack** | SQL Injection, XSS, and brute force web attacks |
+| SOC Class | Raw CICIDS2017 labels mapped to it |
+|-----------|------------------------------------|
+| **Benign** | BENIGN |
+| **DDoS** | DDoS, DoS Hulk, DoS GoldenEye, DoS Slowloris, DoS Slowhttptest |
+| **BruteForce** | FTP-Patator, SSH-Patator, Web Attack (Brute Force / XSS / SQL Injection), PortScan |
+| **Malware** | Bot, Heartbleed |
+| **Exfiltration** | Infiltration |
 
 ### Rule-Based Detection (Custom Text Logs)
 
@@ -530,9 +538,10 @@ For non-network-flow log formats, the rule-based engine detects:
 
 | Threat | Indicators | Priority |
 |--------|-----------|----------|
-| **Brute Force** | ≥ 5 failed login attempts, especially from external IPs | P1/P2 |
-| **Malware Execution** | Execution of `.exe` files or files containing "payload" | P1-Critical |
-| **Data Exfiltration** | Large data transfers (>500MB) to external (non-RFC1918) IPs | P1/P2 |
+| **Brute Force** | ≥ 5 failed login attempts, especially from external IPs | P0-Critical / P1-High |
+| **Malware Execution** | Execution of `.exe` files or files containing "payload" | P0-Critical |
+| **Data Exfiltration** | Large data transfers (>500MB) to external (non-RFC1918) IPs | P0-Critical / P1-High |
+| **Privilege Escalation** | User granted `admin`/`root` role | P0-Critical |
 
 ---
 
@@ -562,7 +571,7 @@ For non-network-flow log formats, the rule-based engine detects:
 Combines both model outputs into a single risk assessment:
 
 ```
-Final Risk = 0.4 × IF_anomaly_score + 0.4 × RF_confidence + 0.2 × context_score
+Final Risk = 0.4 × IF_anomaly_score + 0.6 × RF_classification_contribution
 ```
 
 Generates alerts with priority levels, human-readable reasoning, and deduplication.
@@ -719,7 +728,7 @@ pip install -e ".[dev]"
 black src/ tests/
 
 # Linting
-ruff src/ tests/
+ruff check src/ tests/
 
 # Type checking
 mypy src/

@@ -141,7 +141,7 @@ class ModelInference:
         if label_path.exists():
             with open(label_path) as f:
                 label_data = json.load(f)
-                self._label_classes = label_data.get("classes", [])
+                self._label_classes = label_data.get("classes") or label_data.get("soc_labels", [])
         
         # Load Isolation Forest
         if_path = models_dir / f"{self.config.isolation_forest_name}.joblib"

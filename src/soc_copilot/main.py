@@ -8,10 +8,14 @@ from soc_copilot.core.logging import setup_logging, get_logger
 
 def main() -> int:
     """Main entry point for SOC Copilot."""
+    from dotenv import load_dotenv
+    load_dotenv(Path.cwd() / ".env")
+
     setup_logging()
     logger = get_logger(__name__)
     
-    logger.info("soc_copilot_started", version="0.1.0")
+    from soc_copilot import __version__
+    logger.info("soc_copilot_started", version=__version__)
     
     try:
         # Check if models exist

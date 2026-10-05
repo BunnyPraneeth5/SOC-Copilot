@@ -3,9 +3,8 @@
 Runs ReconAgent, ReputationAgent, and ShodanAgent concurrently via
 ``asyncio.gather``, then feeds their results into the ReportAgent for
 final threat analysis.  Results are cached with ``diskcache`` (6-hour TTL).
-
-.. note::
-    This is a scaffold — full implementation is pending.
+Private/internal IP targets get a local templated report without any
+external lookups.
 """
 
 from __future__ import annotations
@@ -15,7 +14,7 @@ import asyncio
 from soc_copilot.mcp.cache import MCPCache
 from soc_copilot.mcp.exceptions import AgentLookupError
 from soc_copilot.mcp.models import AgentResult, AgentStatus, ThreatReport, ThreatSeverity
-from soc_copilot.security.network import is_external_ip
+from soc_copilot.security.network import is_internal_ip
 from soc_copilot.mcp.recon_agent import ReconAgent
 from soc_copilot.mcp.reputation_agent import ReputationAgent
 from soc_copilot.mcp.shodan_agent import ShodanAgent
@@ -131,12 +130,6 @@ class MCPOrchestrator:
 
         Returns:
             A fully-populated :class:`ThreatReport`.
-
-        Todo:
-            - Integrate diskcache with key format ``"target:<normalized>"``
-            - Parallel gather of agents 1–3
-            - Feed results into ReportAgent
-            - Emit Qt signals back to UI thread
         """
         # diskcache is synchronous. For this desktop app milestone the cache
         # access is small enough to perform directly on the event loop.
@@ -144,7 +137,7 @@ class MCPOrchestrator:
         if cached_report is not None:
             return cached_report
 
-        if not is_external_ip(target):
+        if is_internal_ip(target):
             report = self._build_internal_target_report(target)
             self._cache.set_report(target, report)
             return report

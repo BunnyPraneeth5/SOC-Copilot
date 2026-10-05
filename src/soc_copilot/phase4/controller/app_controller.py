@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Optional, Callable, List
 from pathlib import Path
 
-from soc_copilot.pipeline import create_soc_copilot
+from soc_copilot.pipeline import AnalysisStats, create_soc_copilot
 from .schemas import AnalysisResult, AlertSummary, PipelineStats, LogSummary
 from .result_store import ResultStore
 
@@ -15,6 +15,14 @@ from soc_copilot.security.model_integrity import strict_model_integrity_enabled
 from soc_copilot.security.network import is_external_ip, online_enrichment_enabled
 
 logger = get_logger(__name__)
+
+
+# Priority labels for rule/text-log alerts. Kept identical to
+# soc_copilot.models.ensemble.coordinator.AlertPriority values (not imported,
+# to keep the controller decoupled from the models package).
+PRIORITY_CRITICAL = "P0-Critical"
+PRIORITY_HIGH = "P1-High"
+PRIORITY_MEDIUM = "P2-Medium"
 
 
 class AppController:
@@ -86,16 +94,21 @@ class AppController:
         # Run text log ML detection (falls back to rules if model unavailable)
         text_log_alerts = self._text_log_ml_detect(raw_lines)
         
-        # Analyze batch (using existing ML pipeline)
+        # Analyze batch (using existing ML pipeline). If it fails, keep the
+        # text-log/rule alerts instead of discarding the whole batch.
         try:
             results, alerts, stats = self._analyze_lines(raw_lines)
-        except Exception:
+        except Exception as e:
+            logger.error("ml_pipeline_batch_failed", lines=len(raw_lines), error=str(e))
             self._dropped_count += len(raw_lines)
-            return None
+            if not text_log_alerts:
+                return None
+            results, alerts, stats = [], [], AnalysisStats()
+            stats.total_records = len(raw_lines)
         
-        # Mark as active after first successful batch
+        # Mark as active after first processed batch
         self._running = True
-        self._sources_count += 1
+        self._sources_count = max(self._sources_count, 1)
         self._batches_processed += 1
         
         processing_time = time.time() - start_time
@@ -107,15 +120,20 @@ class AppController:
         alert_summaries.extend(text_log_alerts)
         
         pipeline_stats = self._convert_stats(stats, processing_time)
-        # Update stats with text log alerts
-        pipeline_stats.alerts_generated += len(text_log_alerts)
+        pipeline_stats.alerts_generated = len(alert_summaries)
         for ta in text_log_alerts:
             cls = ta.classification
             pipeline_stats.classification_distribution[cls] = (
                 pipeline_stats.classification_distribution.get(cls, 0) + 1
             )
             
-        # Build generic log summaries for ALL logs
+        # Build generic log summaries for ALL logs. Results are matched to
+        # their originating line by index, since failed records are skipped.
+        results_by_line = {
+            r.source_context["line_index"]: r
+            for r in results
+            if "line_index" in r.source_context
+        }
         log_summaries = []
         for i, line in enumerate(raw_lines):
             cls = "Benign"
@@ -125,8 +143,8 @@ class AppController:
             src_ip = None
             dst_ip = None
             
-            if i < len(results):
-                r = results[i]
+            r = results_by_line.get(i)
+            if r is not None:
                 cls = r.ensemble_result.classification
                 conf = r.ensemble_result.class_confidence
                 risk = r.ensemble_result.risk_level.value
@@ -169,26 +187,26 @@ class AppController:
     # Priority and action mappings for text log classifications
     _CLASSIFICATION_CONFIG = {
         "BruteForce": {
-            "priority_high": "P1-Critical",
-            "priority_low": "P2-High",
+            "priority_high": PRIORITY_CRITICAL,
+            "priority_low": PRIORITY_HIGH,
             "prefix": "ML-BF",
             "action": "Block source IP and investigate compromised credentials",
         },
         "Malware": {
-            "priority_high": "P1-Critical",
-            "priority_low": "P1-Critical",
+            "priority_high": PRIORITY_CRITICAL,
+            "priority_low": PRIORITY_CRITICAL,
             "prefix": "ML-MAL",
             "action": "Isolate host immediately, run malware scan, check for lateral movement",
         },
         "Exfiltration": {
-            "priority_high": "P1-Critical",
-            "priority_low": "P2-High",
+            "priority_high": PRIORITY_CRITICAL,
+            "priority_low": PRIORITY_HIGH,
             "prefix": "ML-EXFIL",
             "action": "Block outbound connection, investigate data contents and authorization",
         },
         "Suspicious": {
-            "priority_high": "P2-High",
-            "priority_low": "P3-Medium",
+            "priority_high": PRIORITY_HIGH,
+            "priority_low": PRIORITY_MEDIUM,
             "prefix": "ML-SUSP",
             "action": "Investigate the activity and correlate with other events",
         },
@@ -320,7 +338,7 @@ class AppController:
                     # Critical: high-volume brute force from external IP
                     alerts.append(AlertSummary(
                         alert_id=f"RULE-BF-{uuid.uuid4().hex[:8]}",
-                        priority="P1-Critical",
+                        priority=PRIORITY_CRITICAL,
                         classification="BruteForce",
                         confidence=0.95,
                         anomaly_score=0.95,
@@ -336,7 +354,7 @@ class AppController:
                     ))
                 elif attempts >= 5:
                     # High: moderate brute force
-                    priority = "P1-Critical" if is_external else "P2-High"
+                    priority = PRIORITY_CRITICAL if is_external else PRIORITY_HIGH
                     risk = 0.90 if is_external else 0.75
                     alerts.append(AlertSummary(
                         alert_id=f"RULE-BF-{uuid.uuid4().hex[:8]}",
@@ -358,13 +376,12 @@ class AppController:
             # Rule 2: Malware Execution Detection
             elif event_type == "FileExecution":
                 host = parsed.get("host", "unknown")
-                action = parsed.get("action", "")
-                filename = action.replace("execute:", "") if action.startswith("execute:") else ""
+                filename = parsed.get("file", "")
                 
                 if filename and (".exe" in filename.lower() or "payload" in filename.lower()):
                     alerts.append(AlertSummary(
                         alert_id=f"RULE-MAL-{uuid.uuid4().hex[:8]}",
-                        priority="P1-Critical",
+                        priority=PRIORITY_CRITICAL,
                         classification="Malware",
                         confidence=0.90,
                         anomaly_score=0.92,
@@ -387,10 +404,10 @@ class AppController:
                 
                 if size_mb > 500 and is_external:
                     if size_mb > 2000:
-                        priority = "P1-Critical"
+                        priority = PRIORITY_CRITICAL
                         risk = 0.95
                     else:
-                        priority = "P2-High"
+                        priority = PRIORITY_HIGH
                         risk = 0.80
                     
                     alerts.append(AlertSummary(
@@ -417,7 +434,7 @@ class AppController:
                 if new_role.lower() in ("admin", "root"):
                     alerts.append(AlertSummary(
                         alert_id=f"RULE-PRIV-{uuid.uuid4().hex[:8]}",
-                        priority="P1-Critical",
+                        priority=PRIORITY_CRITICAL,
                         classification="PrivilegeEscalation",
                         confidence=0.90,
                         anomaly_score=0.93,
@@ -451,6 +468,7 @@ class AppController:
             "src_ip": "",
             "dst_ip": "",
             "host": "",
+            "file": "",
             "action": "log_entry",
             "protocol": "TCP",
             "raw_log": line,
@@ -490,6 +508,7 @@ class AppController:
             elif key == 'user':
                 entry["user"] = value
             elif key == 'file':
+                entry["file"] = value
                 entry["action"] = f"execute:{value}"
             elif key == 'attempts':
                 try:
@@ -530,16 +549,16 @@ class AppController:
         
         # Create temp file in JSONL format for proper parsing
         with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False, encoding='utf-8') as f:
-            for line in lines:
-                # Try to parse as JSON, otherwise extract from raw log
+            for index, line in enumerate(lines):
+                # Use JSON objects as-is, otherwise extract fields from the raw log
                 try:
-                    # If it's already valid JSON, write as-is
-                    json.loads(line)
-                    f.write(line + '\n')
+                    log_entry = json.loads(line)
                 except (json.JSONDecodeError, TypeError):
-                    # Parse raw log to extract attack patterns
+                    log_entry = None
+                if not isinstance(log_entry, dict):
                     log_entry = self._parse_raw_log(line)
-                    f.write(json.dumps(log_entry) + '\n')
+                log_entry["_line_index"] = index
+                f.write(json.dumps(log_entry) + '\n')
             temp_path = f.name
         
         try:
@@ -572,11 +591,15 @@ class AppController:
         return PipelineStats(
             total_records=stats.total_records,
             processed_records=stats.processed_records,
-            alerts_generated=len(stats.risk_distribution),
+            alerts_generated=0,
             risk_distribution=dict(stats.risk_distribution),
             classification_distribution=dict(stats.classification_distribution),
             processing_time=processing_time
         )
+    
+    def set_sources_count(self, count: int) -> None:
+        """Record how many log sources are feeding this controller."""
+        self._sources_count = max(0, count)
     
     def get_results(self, limit: int = 10) -> List[AnalysisResult]:
         """Get latest analysis results"""

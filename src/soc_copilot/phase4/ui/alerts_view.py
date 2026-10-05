@@ -277,6 +277,7 @@ class AlertsView(QWidget):
             "critical": "Critical",
             "high": "High",
             "medium": "Medium",
+            "low": "Low",
             "all": "All"
         }
         filter_text = priority_map.get(priority.lower(), "All")

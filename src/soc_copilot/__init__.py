@@ -1,6 +1,6 @@
 """SOC Copilot - Offline Security Operations Center Assistant."""
 
-__version__ = "0.1.0"
+__version__ = "1.0.0b1"
 
 from soc_copilot.pipeline import (
     SOCCopilot,

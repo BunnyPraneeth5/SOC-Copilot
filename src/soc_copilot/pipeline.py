@@ -190,6 +190,7 @@ class SOCCopilot:
             df.loc[i, "_record_id"] = getattr(record, "record_id", str(i))
             df.loc[i, "_source_file"] = str(record.source_file) if record.source_file else ""
             df.loc[i, "_line_number"] = getattr(record, "line_number", i)
+        df["_record_pos"] = range(len(records))
 
         # Preprocessing — pipeline expects list[dict], not a DataFrame
         try:
@@ -199,6 +200,15 @@ class SOCCopilot:
         except Exception as e:
             logger.error("preprocessing_failed", error=str(e))
             df_pre = df.copy()
+
+        # Preprocessing may drop records (e.g. no timestamp) and re-index;
+        # restore the original record positions so rows map to the right record.
+        pos_col = next((c for c in ("_record_pos", "record_pos") if c in df_pre.columns), None)
+        if pos_col is not None:
+            df_pre.index = df_pre[pos_col].astype(int)
+        dropped = len(records) - len(df_pre)
+        if dropped > 0:
+            logger.warning("records_dropped_in_preprocessing", dropped=dropped, total=len(records))
 
         # Feature engineering
         try:
@@ -283,6 +293,8 @@ class SOCCopilot:
             context["record_id"] = getattr(record, "record_id", None) or str(id(record))
             context["source_file"] = str(getattr(record, "source_file", "") or "")
             context["line_number"] = getattr(record, "line_number", 0)
+            if "_line_index" in record.raw:
+                context["line_index"] = record.raw["_line_index"]
 
         return context
 

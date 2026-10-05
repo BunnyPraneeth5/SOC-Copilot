@@ -342,8 +342,9 @@ async def test_concurrent_same_target_calls_both_run_full_pipeline() -> None:
         orchestrator.investigate("example.com"),
     )
 
-    assert first == _report()
-    assert second == _report()
+    expected = _report().model_dump(exclude={"generated_at"})
+    assert first.model_dump(exclude={"generated_at"}) == expected
+    assert second.model_dump(exclude={"generated_at"}) == expected
     assert cache.requested_targets == ["example.com", "example.com"]
     assert [agent.targets for agent in agents] == [
         ["example.com", "example.com"],

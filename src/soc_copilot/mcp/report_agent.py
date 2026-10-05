@@ -1,11 +1,9 @@
 """ReportAgent — LLM-powered threat analysis and severity rating.
 
 Aggregates outputs from ReconAgent, ReputationAgent, and ShodanAgent,
-then calls the Anthropic Claude API to generate a structured
+then calls the configured OpenAI-compatible LLM provider (NVIDIA NIM or
+OpenRouter, selected via ``REPORT_LLM_PROVIDER``) to generate a structured
 ThreatReport with severity classification.
-
-.. note::
-    This is a scaffold — full implementation is pending.
 """
 
 from __future__ import annotations
