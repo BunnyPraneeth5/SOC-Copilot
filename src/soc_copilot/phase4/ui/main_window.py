@@ -253,10 +253,11 @@ class Sidebar(QFrame):
         self.nav_changed.emit(index)
     
     def _start_polling(self):
-        """Poll for status and badge updates (reduced to 3 seconds)"""
-        self.poll_timer = QTimer()
-        self.poll_timer.timeout.connect(self._update_status)
-        self.poll_timer.start(3000)  # Reduced from 1000ms
+        """Initial status update.
+
+        Periodic polling removed (UX-3): MainWindow's consolidated status
+        timer calls ``_update_status`` directly.
+        """
         self._update_status()
     
     def _update_status(self):
@@ -408,11 +409,13 @@ class MainWindow(QMainWindow):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         self._update_status_bar()
-        
-        # Status bar updates (reduced to 3 seconds)
+
+        # Single consolidated status timer (UX-3): status-bar text,
+        # sidebar indicators, system status bar/banners, and the
+        # settings panel's status indicators all refresh together.
         self.status_timer = QTimer()
-        self.status_timer.timeout.connect(self._update_status_bar)
-        self.status_timer.start(3000)
+        self.status_timer.timeout.connect(self._update_status_widgets)
+        self.status_timer.start(5000)
         
         # Keyboard shortcuts
         self._setup_shortcuts()
@@ -449,10 +452,18 @@ class MainWindow(QMainWindow):
     def _on_nav_changed(self, index: int):
         """Handle navigation changes"""
         self.page_stack.setCurrentIndex(index)
-        
+
         # Update sidebar buttons
         for btn in self.sidebar.nav_buttons:
             btn.setActive(btn.index == index)
+
+        # Refresh the page being shown so nothing is stale (UX-3)
+        refresh = getattr(self.page_stack.widget(index), "refresh", None)
+        if callable(refresh):
+            try:
+                refresh()
+            except Exception:
+                pass
     
     def _on_navigate_alerts_filtered(self, priority: str):
         """Navigate to alerts with a specific priority filter"""
@@ -500,6 +511,13 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.status_bar.showMessage(f"Error: {str(e)}", 3000)
     
+    def _update_status_widgets(self):
+        """Consolidated periodic status refresh (one 5 s timer)."""
+        self._update_status_bar()
+        self.sidebar._update_status()
+        self.system_status_bar.refresh()
+        self.config_panel.refresh()
+
     def _update_status_bar(self):
         """Update status bar with real-time info"""
         try:

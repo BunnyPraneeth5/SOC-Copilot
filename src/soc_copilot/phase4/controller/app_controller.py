@@ -75,6 +75,7 @@ class AppController:
         self.audit_logger = audit_logger
         self._drift_recorded = 0
         self._drift_last_report = 0
+        self._result_listeners = []
         self._pipeline = None
         self._text_log_classifier = None
         self._text_log_model_status = {
@@ -258,8 +259,36 @@ class AppController:
         
         # Store result
         self.result_store.add(result)
-        
+        self._notify_result_listeners(result)
+
         return result
+
+    # ------------------------------------------------------------------
+    # Result listeners (UX-3: event-driven UI refresh)
+    # ------------------------------------------------------------------
+
+    def add_result_listener(self, callback) -> None:
+        """Register ``callback(result)`` invoked after each stored result.
+
+        ``result`` is an ``AnalysisResult``; ``None`` after ``clear_results``.
+        Listeners run on the producing thread — UI code should emit a Qt
+        signal rather than touch widgets directly.
+        """
+        self._result_listeners.append(callback)
+
+    def remove_result_listener(self, callback) -> None:
+        """Remove a previously-registered listener (no-op if absent)."""
+        try:
+            self._result_listeners.remove(callback)
+        except ValueError:
+            pass
+
+    def _notify_result_listeners(self, result) -> None:
+        for cb in list(self._result_listeners):
+            try:
+                cb(result)
+            except Exception as e:
+                logger.warning(f"Result listener failed: {e}")
     
     # ------------------------------------------------------------------
     # Text Log ML Detection
@@ -1082,3 +1111,4 @@ class AppController:
     def clear_results(self):
         """Clear stored results"""
         self.result_store.clear()
+        self._notify_result_listeners(None)

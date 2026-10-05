@@ -131,7 +131,8 @@ class SystemStatusBar(QFrame):
         super().__init__()
         self.bridge = bridge
         self._init_ui()
-        self._init_polling()
+        # No own timer — refreshed by MainWindow's consolidated status timer
+        self._update_status()
     
     def _init_ui(self):
         self._separators = []
@@ -204,13 +205,8 @@ class SystemStatusBar(QFrame):
         self._separators.append(sep)
         return sep
     
-    def _init_polling(self):
-        """Start polling for status updates - 2 seconds (optimized from 1s)"""
-        self.poll_timer = QTimer()
-        self.poll_timer.timeout.connect(self._update_status)
-        self.poll_timer.start(2000)
-        
-        # Initial update
+    def refresh(self):
+        """Public refresh entry (called by MainWindow's status timer)."""
         self._update_status()
     
     def _update_status(self):

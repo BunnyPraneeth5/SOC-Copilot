@@ -6,7 +6,7 @@ from typing import List, Optional, Dict, Any, Callable
 from pathlib import Path
 from datetime import datetime
 import threading
-from PyQt6.QtCore import QObject, QRunnable, QThreadPool, pyqtSignal
+from PyQt6.QtCore import QObject, QRunnable, QThreadPool, QTimer, pyqtSignal
 from ..controller import AppController, AnalysisResult
 from soc_copilot.mcp import AgentLookupError, MCPOrchestrator, ThreatReport
 from soc_copilot.security.input_validator import validate_log_file
@@ -83,7 +83,9 @@ class ControllerBridge(QObject):
 
     reportReady = pyqtSignal(str, object, object)  # target, ThreatReport | None, InvestigationError | None
     providersChecked = pyqtSignal(object)  # list[ProviderStatus] | None
-    
+    resultsUpdated = pyqtSignal()  # results store changed (debounced)
+    _resultArrived = pyqtSignal()  # internal: raw listener callback relay
+
     def __init__(self, controller: AppController):
         super().__init__()
         self._controller = controller
@@ -92,7 +94,30 @@ class ControllerBridge(QObject):
         self._process_lock = threading.Lock()  # Serialize pipeline access
         self._in_flight_targets: set[str] = set()
         self._active_investigations: dict[str, dict[str, object]] = {}
+
+        # Event-driven refresh: the controller notifies us on a worker
+        # thread; emit _resultArrived (queued to the UI thread) and
+        # coalesce bursts into one resultsUpdated after 250 ms of quiet.
+        self._result_timer = QTimer(self)
+        self._result_timer.setSingleShot(True)
+        self._result_timer.setInterval(250)
+        self._result_timer.timeout.connect(self.resultsUpdated.emit)
+        self._resultArrived.connect(self._schedule_results_updated)
+        add_listener = getattr(controller, "add_result_listener", None)
+        if callable(add_listener):
+            add_listener(lambda _result: self._resultArrived.emit())
+
         self._check_permissions()
+
+    def _schedule_results_updated(self) -> None:
+        """Throttle: start the timer on the first arrival only, so a steady
+        stream of results still refreshes the UI every 250 ms."""
+        if not self._result_timer.isActive():
+            self._result_timer.start()
+
+    def request_refresh(self) -> None:
+        """Emit resultsUpdated immediately (manual refresh, upload done)."""
+        self.resultsUpdated.emit()
 
     def is_investigation_in_flight(self, target: str) -> bool:
         """Return whether target is queued or running."""

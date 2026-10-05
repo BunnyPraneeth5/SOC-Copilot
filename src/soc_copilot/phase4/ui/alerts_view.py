@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem, 
     QHeaderView, QLabel, QPushButton, QComboBox, QLineEdit, QMessageBox
 )
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QColor
 
 from .theme import ThemeManager, severity_color
@@ -34,16 +34,30 @@ class AlertsView(QWidget):
         self._alert_cache = {}  # batch_id -> alert data
         self._current_filter = "All"
         self._search_text = ""
+        self._dirty = False
         self._init_ui()
         self.bridge.reportReady.connect(self._on_report_ready)
-        
-        # Fast refresh for real-time feel
-        self.timer = QTimer()
-        self.timer.timeout.connect(self._incremental_refresh)
-        self.timer.start(2000)  # 2 seconds
-        
+
+        # Event-driven refresh: resultsUpdated fires when the results
+        # store changes (debounced in the bridge).
+        self.bridge.resultsUpdated.connect(self._on_results_updated)
+
         # Initial refresh
         self.refresh()
+
+    def _on_results_updated(self):
+        """Refresh on new results, deferring work while hidden."""
+        if self.isVisible():
+            self._incremental_refresh()
+            self._dirty = False
+        else:
+            self._dirty = True
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._dirty:
+            self._dirty = False
+            self.refresh()
     
     def _init_ui(self):
         layout = QVBoxLayout()

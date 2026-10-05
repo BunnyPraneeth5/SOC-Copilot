@@ -512,14 +512,27 @@ class Dashboard(QWidget):
         self.bridge = bridge
         self._alerts_cache = []
         self._worker = None  # Background file processing thread
+        self._dirty = False
         self._init_ui()
-        
-        # Unified polling (3 seconds)
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.refresh)
-        self.timer.start(3000)
-        
+
+        # Event-driven refresh (debounced in the bridge)
+        self.bridge.resultsUpdated.connect(self._on_results_updated)
+
         self.refresh()
+
+    def _on_results_updated(self):
+        """Refresh on new results, deferring work while hidden."""
+        if self.isVisible():
+            self.refresh()
+            self._dirty = False
+        else:
+            self._dirty = True
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._dirty:
+            self._dirty = False
+            self.refresh()
     
     def _init_ui(self):
         layout = QVBoxLayout()
@@ -695,6 +708,7 @@ class Dashboard(QWidget):
     def _on_worker_done(self, success_count, total_count):
         """Handle worker completion — refresh dashboard with new results."""
         self.bridge.start_ingestion()
+        self.bridge.request_refresh()
         self.refresh()
         self.status_strip.timestamp_label.setText(
             f"Processed {success_count}/{total_count} files at {datetime.now().strftime('%H:%M:%S')}"
