@@ -190,6 +190,14 @@ class ControllerBridge(QObject):
     def get_latest_alerts(self, limit: int = 50) -> List[AnalysisResult]:
         """Get latest analysis results (read-only)"""
         return self._controller.get_results(limit=limit)
+
+    def get_all_results(self) -> List[AnalysisResult]:
+        """All stored results (read-only) — for UX-6 pagination/export."""
+        getter = getattr(self._controller, "get_all_results", None)
+        if callable(getter):
+            return getter()
+        getter = getattr(self._controller, "get_results", None)
+        return getter(limit=1_000_000) if callable(getter) else []
     
     def get_alert_by_id(self, batch_id: str) -> Optional[AnalysisResult]:
         """Get specific result by ID (read-only)"""

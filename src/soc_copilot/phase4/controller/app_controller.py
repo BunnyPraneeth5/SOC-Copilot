@@ -1112,6 +1112,10 @@ class AppController:
     def get_results(self, limit: int = 10) -> List[AnalysisResult]:
         """Get latest analysis results"""
         return self.result_store.get_latest(limit)
+
+    def get_all_results(self) -> List[AnalysisResult]:
+        """Get all stored results (read-only)."""
+        return self.result_store.get_all()
     
     def get_result_by_id(self, batch_id: str) -> Optional[AnalysisResult]:
         """Get specific result by ID"""

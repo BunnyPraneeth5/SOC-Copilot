@@ -1,14 +1,17 @@
 """Optimized alerts table with incremental updates and scroll preservation"""
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem, 
-    QHeaderView, QLabel, QPushButton, QComboBox, QLineEdit, QMessageBox
+    QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
+    QHeaderView, QLabel, QPushButton, QComboBox, QLineEdit, QMessageBox,
+    QFileDialog,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6 import sip
 from PyQt6.QtGui import QFont, QColor
 
-from .theme import ThemeManager, severity_color
+from datetime import datetime
+
+from .theme import ThemeManager, severity_color, set_role
 from ..controller.result_store import TRIAGE_STATUSES
 
 
@@ -38,6 +41,9 @@ class AlertsView(QWidget):
         self._current_filter = "All"
         self._current_status_filter = "All"
         self._search_text = ""
+        self._page = 0
+        self._page_size = 100
+        self._filtered_cache = []
         self._dirty = False
         self.report_drawer = None  # optional; attached by MainWindow
         self._init_ui()
@@ -69,20 +75,38 @@ class AlertsView(QWidget):
 
     @staticmethod
     def _alert_dict(result, alert, triage: dict) -> dict:
+        ts = getattr(alert, "timestamp", None)
         return {
             "key": f"{result.batch_id}_{alert.classification}",
             "batch_id": result.batch_id,
             "alert_id": alert.alert_id,
-            "time": alert.timestamp.strftime("%H:%M:%S")
-                    if hasattr(alert.timestamp, 'strftime')
-                    else str(alert.timestamp),
+            "time": ts.strftime("%H:%M:%S")
+                    if hasattr(ts, 'strftime') else str(ts),
+            "timestamp": ts,  # raw value for sorting/export
             "priority": alert.priority,
             "status": triage.get(alert.alert_id, "New"),
             "classification": alert.classification,
             "source_ip": getattr(alert, 'source_ip', None) or "N/A",
+            "destination_ip": getattr(alert, 'destination_ip', None) or "N/A",
             "confidence": f"{alert.confidence:.2f}"
                           if hasattr(alert, 'confidence') else "N/A",
+            "risk_score": getattr(alert, "risk_score", None),
+            "anomaly_score": getattr(alert, "anomaly_score", None),
+            "reasoning": getattr(alert, "reasoning", "") or "",
+            "suggested_action": getattr(alert, "suggested_action", "") or "",
         }
+
+    def _results(self):
+        """All stored results (falls back to latest-200 for mocks).
+
+        Errors propagate so ``refresh`` shows the error state.
+        """
+        getter = getattr(self.bridge, "get_all_results", None)
+        results = getter() if callable(getter) else None
+        if isinstance(results, list):
+            return results
+        results = self.bridge.get_latest_alerts(limit=200)
+        return results if isinstance(results, list) else []
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -127,7 +151,44 @@ class AlertsView(QWidget):
         self.table.setUpdatesEnabled(True)
         
         layout.addWidget(self.table)
-        
+
+        # Pagination bar (UX-6)
+        pager = QHBoxLayout()
+        pager.setContentsMargins(0, 0, 0, 0)
+
+        page_size_label = QLabel("Rows:")
+        page_size_label.setStyleSheet(
+            f"color: {_palette().text_muted}; font-size: 12px;"
+        )
+        self._page_size_label = page_size_label
+        pager.addWidget(page_size_label)
+
+        self.page_size_combo = QComboBox()
+        self.page_size_combo.addItems(["50", "100", "200"])
+        self.page_size_combo.setCurrentText("100")
+        self.page_size_combo.setStyleSheet(self._combo_style(_palette()))
+        self.page_size_combo.currentTextChanged.connect(
+            self._on_page_size_changed
+        )
+        pager.addWidget(self.page_size_combo)
+
+        self.prev_btn = QPushButton("◀ Prev")
+        self.prev_btn.clicked.connect(self._on_prev_page)
+        pager.addWidget(self.prev_btn)
+
+        self.next_btn = QPushButton("Next ▶")
+        self.next_btn.clicked.connect(self._on_next_page)
+        pager.addWidget(self.next_btn)
+
+        self.page_label = QLabel("Page 1 of 1")
+        self.page_label.setStyleSheet(
+            f"color: {_palette().text_muted}; font-size: 12px;"
+        )
+        pager.addWidget(self.page_label)
+
+        pager.addStretch()
+        layout.addLayout(pager)
+
         # Empty state label
         self.empty_label = QLabel("")
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -155,8 +216,13 @@ class AlertsView(QWidget):
             )
             self.priority_filter.setStyleSheet(self._combo_style(p))
             self.status_filter.setStyleSheet(self._combo_style(p))
+            self.page_size_combo.setStyleSheet(self._combo_style(p))
             self.search_box.setStyleSheet(self._search_style(p))
             self._refresh_btn.setStyleSheet(self._refresh_style(p))
+            muted = f"color: {p.text_muted}; font-size: 12px;"
+            self.page_label.setStyleSheet(muted)
+            self._page_size_label.setStyleSheet(muted)
+            self._status_filter_label.setStyleSheet(muted)
         self._reapply_in_flight_row_state()
 
     @staticmethod
@@ -272,13 +338,21 @@ class AlertsView(QWidget):
         refresh_btn.setStyleSheet(self._refresh_style(p))
         refresh_btn.clicked.connect(self.refresh)
         header.addWidget(refresh_btn)
-        
+
+        # Export button (UX-6)
+        export_btn = QPushButton("Export…")
+        self._export_btn = export_btn
+        set_role(export_btn, "secondary")
+        export_btn.setToolTip("Export filtered alerts as CSV or JSON")
+        export_btn.clicked.connect(self._on_export)
+        header.addWidget(export_btn)
+
         return header
     
     def refresh(self):
         """Full refresh - rebuild cache and table"""
         try:
-            results = self.bridge.get_latest_alerts(limit=200)  # Increased limit
+            results = self._results()
             triage = self._triage_map()
 
             # Rebuild cache
@@ -291,22 +365,21 @@ class AlertsView(QWidget):
                     self._alert_cache[alert_dict["key"]] = alert_dict
                     alerts_data.append(alert_dict)
             
-            # Update counter
-            self._update_counter(alerts_data)
-            
             # Handle empty state
             if not alerts_data:
                 self._remove_action_widgets()
                 self.table.setRowCount(0)
+                self._filtered_cache = []
+                self._update_page_controls()
                 self._show_empty_state()
                 return
-            
+
             self.empty_label.hide()
             self.table.show()
-            
-            # Apply filters and update table
+
+            # Apply filters and render the current page
             filtered = self._apply_filters(alerts_data)
-            self._update_table(filtered)
+            self._render_alerts(filtered)
         
         except Exception as e:
             self._show_error_state(str(e))
@@ -314,7 +387,7 @@ class AlertsView(QWidget):
     def _incremental_refresh(self):
         """Incremental refresh - only update if new alerts"""
         try:
-            results = self.bridge.get_latest_alerts(limit=200)
+            results = self._results()
             triage = self._triage_map()
 
             # Merge current triage statuses into cached alerts (a status
@@ -338,9 +411,8 @@ class AlertsView(QWidget):
             # Only update if there are new alerts or status changes
             if new_alerts or status_changed:
                 all_alerts = list(self._alert_cache.values())
-                self._update_counter(all_alerts)
                 filtered = self._apply_filters(all_alerts)
-                self._update_table_incremental(filtered, preserve_scroll=True)
+                self._render_alerts(filtered, preserve_scroll=True)
         
         except Exception:
             pass  # Silent fail for incremental updates
@@ -376,6 +448,93 @@ class AlertsView(QWidget):
             ]
         
         return filtered
+
+    # ------------------------------------------------------------------
+    # Pagination + export (UX-6)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _sort_key(alert: dict):
+        ts = alert.get("timestamp")
+        return ts.isoformat() if isinstance(ts, datetime) else str(ts or "")
+
+    def _render_alerts(self, filtered: list, preserve_scroll: bool = False):
+        """Sort, paginate and render the filtered alert set."""
+        filtered = sorted(filtered, key=self._sort_key, reverse=True)
+        self._filtered_cache = filtered
+
+        total = len(filtered)
+        pages = max(1, -(-total // self._page_size))
+        self._page = max(0, min(self._page, pages - 1))  # clamp
+
+        start = self._page * self._page_size
+        page_rows = filtered[start:start + self._page_size]
+
+        self._update_counter(filtered)
+        self._update_table_incremental(page_rows, preserve_scroll)
+        self._update_page_controls()
+
+    def _update_page_controls(self):
+        total = len(getattr(self, "_filtered_cache", []))
+        pages = max(1, -(-total // self._page_size))
+        start = self._page * self._page_size
+        end = min(total, start + self._page_size)
+        shown = f"{start + 1}\u2013{end}" if total else "0"
+        self.page_label.setText(
+            f"Page {self._page + 1} of {pages} \u00b7 showing {shown} of {total}"
+        )
+        self.prev_btn.setEnabled(self._page > 0)
+        self.next_btn.setEnabled(self._page < pages - 1)
+
+    def _on_page_size_changed(self, text: str):
+        try:
+            self._page_size = int(text)
+        except ValueError:
+            return
+        self._page = 0
+        self._render_alerts(self._filtered_cache)
+
+    def _on_prev_page(self):
+        if self._page > 0:
+            self._page -= 1
+            self._render_alerts(self._filtered_cache, preserve_scroll=False)
+
+    def _on_next_page(self):
+        total = len(self._filtered_cache)
+        if (self._page + 1) * self._page_size < total:
+            self._page += 1
+            self._render_alerts(self._filtered_cache, preserve_scroll=False)
+
+    def _on_export(self):
+        """Export the full filtered set (all pages) as CSV or JSON."""
+        from .alert_export import alerts_to_csv, alerts_to_json
+
+        path, selected = QFileDialog.getSaveFileName(
+            self,
+            "Export alerts",
+            f"soc_alerts_{datetime.now().strftime('%Y%m%d_%H%M')}",
+            "CSV (*.csv);;JSON (*.json)",
+        )
+        if not path:
+            return
+        try:
+            is_json = path.lower().endswith(".json") or "JSON" in selected
+            text = (
+                alerts_to_json(self._filtered_cache)
+                if is_json else alerts_to_csv(self._filtered_cache)
+            )
+            with open(path, "w", encoding="utf-8", newline="") as f:
+                f.write(text)
+            window = self.window()
+            if hasattr(window, "statusBar"):
+                window.statusBar().showMessage(
+                    f"Exported {len(self._filtered_cache)} alerts to {path}",
+                    5000,
+                )
+        except Exception as exc:
+            QMessageBox.critical(
+                self, "Export failed", f"Could not export alerts:\n{exc}"
+            )
     
     def _update_counter(self, alerts_data: list):
         """Update alert counters"""
@@ -410,23 +569,26 @@ class AlertsView(QWidget):
     def _on_filter_changed(self, text: str):
         """Handle filter change"""
         self._current_filter = text
+        self._page = 0  # filters reset to first page (UX-6)
         all_alerts = list(self._alert_cache.values())
         filtered = self._apply_filters(all_alerts)
-        self._update_table(filtered)
+        self._render_alerts(filtered)
 
     def _on_status_filter_changed(self, text: str):
         """Handle triage status filter change"""
         self._current_status_filter = text
+        self._page = 0
         all_alerts = list(self._alert_cache.values())
         filtered = self._apply_filters(all_alerts)
-        self._update_table(filtered)
+        self._render_alerts(filtered)
 
     def _on_search_changed(self, text: str):
         """Handle search change"""
         self._search_text = text
+        self._page = 0
         all_alerts = list(self._alert_cache.values())
         filtered = self._apply_filters(all_alerts)
-        self._update_table(filtered)
+        self._render_alerts(filtered)
     
     def _show_empty_state(self):
         """Show appropriate empty state message"""
