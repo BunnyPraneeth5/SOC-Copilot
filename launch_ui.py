@@ -162,7 +162,11 @@ def main():
                 print("All required models found.")
         
         # Initialize controller with error handling
-        controller = AppController(str(models_dir), killswitch_check=kill_switch.is_active)
+        controller = AppController(
+            str(models_dir),
+            killswitch_check=kill_switch.is_active,
+            results_db=project_root / "data" / "alerts" / "results.db",
+        )
         
         try:
             controller.initialize()

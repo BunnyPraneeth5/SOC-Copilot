@@ -60,6 +60,7 @@ data/datasets/
 data/models/*.joblib
 data/models/model_hashes.json
 data/models_backup/*.joblib
+data/alerts/*.db
 data/drift/*.db
 data/feedback/*.db
 data/governance/*.db

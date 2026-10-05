@@ -28,10 +28,15 @@ PRIORITY_MEDIUM = "P2-Medium"
 class AppController:
     """Main application controller for real-time analysis"""
     
-    def __init__(self, models_dir: str, killswitch_check: Optional[Callable[[], bool]] = None):
+    def __init__(
+        self,
+        models_dir: str,
+        killswitch_check: Optional[Callable[[], bool]] = None,
+        results_db=None,
+    ):
         self.models_dir = models_dir
         self.killswitch_check = killswitch_check
-        self.result_store = ResultStore(max_results=1000)
+        self.result_store = ResultStore(max_results=1000, db_path=results_db)
         self._pipeline = None
         self._text_log_classifier = None
         self._text_log_model_status = {

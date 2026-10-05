@@ -30,7 +30,10 @@ def main() -> int:
         from soc_copilot.phase4.ui import MainWindow
         
         # Initialize controller
-        controller = AppController(str(models_dir))
+        controller = AppController(
+            str(models_dir),
+            results_db=Path("data/alerts/results.db"),
+        )
         
         try:
             controller.initialize()
