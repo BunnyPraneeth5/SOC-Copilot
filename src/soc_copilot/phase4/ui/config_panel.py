@@ -17,11 +17,16 @@ from PyQt6.QtGui import QFont
 
 from ..config import ConfigManager
 from ..kill_switch import KillSwitch
+from .theme import ThemeManager, set_role
 from .state_constants import (
     get_ingestion_state, get_governance_state,
     INGESTION_STATES, GOVERNANCE_STATES,
     GovernanceState
 )
+
+
+def _palette():
+    return ThemeManager.instance().palette
 
 
 class ToggleSwitch(QFrame):
@@ -54,33 +59,34 @@ class ToggleSwitch(QFrame):
         self.setLayout(layout)
     
     def _update_style(self):
+        p = _palette()
         if self._state:
-            self.setStyleSheet("""
-                QFrame {
-                    background-color: #4CAF50;
+            self.setStyleSheet(f"""
+                QFrame {{
+                    background-color: {p.success};
                     border-radius: 15px;
-                    border: 2px solid #388E3C;
-                }
+                    border: 2px solid {p.success};
+                }}
             """)
-            self.knob.setStyleSheet("""
-                QLabel {
-                    background-color: white;
+            self.knob.setStyleSheet(f"""
+                QLabel {{
+                    background-color: {p.text};
                     border-radius: 12px;
-                }
+                }}
             """)
         else:
-            self.setStyleSheet("""
-                QFrame {
-                    background-color: #666666;
+            self.setStyleSheet(f"""
+                QFrame {{
+                    background-color: {p.text_muted};
                     border-radius: 15px;
-                    border: 2px solid #444444;
-                }
+                    border: 2px solid {p.border};
+                }}
             """)
-            self.knob.setStyleSheet("""
-                QLabel {
-                    background-color: #cccccc;
+            self.knob.setStyleSheet(f"""
+                QLabel {{
+                    background-color: {p.surface_alt};
                     border-radius: 12px;
-                }
+                }}
             """)
     
     def mousePressEvent(self, event):
@@ -117,9 +123,9 @@ class ToggleSwitch(QFrame):
 class StatusIndicator(QFrame):
     """Status indicator with colored dot and label"""
     
-    def __init__(self, label: str, status: str = "Unknown", color: str = "#888888"):
+    def __init__(self, label: str, status: str = "Unknown", color: str | None = None):
         super().__init__()
-        self._init_ui(label, status, color)
+        self._init_ui(label, status, color or _palette().text_muted)
     
     def _init_ui(self, label: str, status: str, color: str):
         layout = QHBoxLayout()
@@ -132,12 +138,13 @@ class StatusIndicator(QFrame):
         
         # Label
         label_widget = QLabel(f"{label}:")
-        label_widget.setStyleSheet("color: #888888; font-weight: bold;")
+        label_widget.setStyleSheet(
+            f"color: {_palette().text_muted}; font-weight: bold;"
+        )
         layout.addWidget(label_widget)
-        
+
         # Status value
         self.status_label = QLabel(status)
-        self.status_label.setStyleSheet("color: #ffffff;")
         layout.addWidget(self.status_label)
         
         layout.addStretch()
@@ -187,18 +194,20 @@ class ConfigPanel(QWidget):
         
         # Restart warning (hidden by default)
         self.restart_warning = QFrame()
-        self.restart_warning.setStyleSheet("""
-            QFrame {
-                background-color: #FFC107;
+        self.restart_warning.setStyleSheet(f"""
+            QFrame {{
+                background-color: {_palette().warning};
                 border-radius: 5px;
                 padding: 10px;
-            }
+            }}
         """)
         warning_layout = QHBoxLayout()
         warning_icon = QLabel("⚠️")
         warning_icon.setFont(QFont("Arial", 18))
         warning_text = QLabel("Configuration changed. Restart required for changes to take effect.")
-        warning_text.setStyleSheet("color: #000000; font-weight: bold;")
+        warning_text.setStyleSheet(
+            f"color: {_palette().text_inverse}; font-weight: bold;"
+        )
         warning_layout.addWidget(warning_icon)
         warning_layout.addWidget(warning_text)
         warning_layout.addStretch()
@@ -208,24 +217,9 @@ class ConfigPanel(QWidget):
         
         # System Logs Toggle Section
         toggle_group = QGroupBox("System Log Ingestion")
-        toggle_group.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                border: 1px solid #444444;
-                border-radius: 5px;
-                margin-top: 10px;
-                padding-top: 10px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px;
-            }
-        """)
         toggle_layout = QHBoxLayout()
-        
+
         toggle_label = QLabel("Enable System Logs:")
-        toggle_label.setStyleSheet("color: #ffffff;")
         toggle_layout.addWidget(toggle_label)
         
         initial_state = self.config_manager.get_system_logs_enabled()
@@ -235,7 +229,9 @@ class ConfigPanel(QWidget):
         toggle_layout.addStretch()
         
         toggle_note = QLabel("Changes require application restart")
-        toggle_note.setStyleSheet("color: #888888; font-style: italic;")
+        toggle_note.setStyleSheet(
+            f"color: {_palette().text_muted}; font-style: italic;"
+        )
         toggle_layout.addWidget(toggle_note)
         
         toggle_group.setLayout(toggle_layout)
@@ -243,57 +239,44 @@ class ConfigPanel(QWidget):
         
         # Status Indicators Section
         status_group = QGroupBox("System Status")
-        status_group.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                border: 1px solid #444444;
-                border-radius: 5px;
-                margin-top: 10px;
-                padding-top: 10px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px;
-            }
-        """)
         status_layout = QGridLayout()
         status_layout.setSpacing(10)
         
         # System Logs Enabled
-        self.logs_indicator = StatusIndicator("System Logs", "Disabled", "#666666")
+        _p = _palette()
+        self.logs_indicator = StatusIndicator("System Logs", "Disabled", _p.text_muted)
         status_layout.addWidget(self.logs_indicator, 0, 0)
-        
+
         # Operating System
-        self.os_indicator = StatusIndicator("Operating System", platform.system(), "#2196F3")
+        self.os_indicator = StatusIndicator("Operating System", platform.system(), _p.info)
         status_layout.addWidget(self.os_indicator, 0, 1)
-        
+
         # Permission Status
-        self.perm_indicator = StatusIndicator("Permissions", "Unknown", "#888888")
+        self.perm_indicator = StatusIndicator("Permissions", "Unknown", _p.text_muted)
         status_layout.addWidget(self.perm_indicator, 1, 0)
-        
+
         # Kill Switch
-        self.kill_indicator = StatusIndicator("Kill Switch", "Inactive", "#4CAF50")
+        self.kill_indicator = StatusIndicator("Kill Switch", "Inactive", _p.success)
         status_layout.addWidget(self.kill_indicator, 1, 1)
-        
+
         # Ingestion Status
-        self.ingestion_indicator = StatusIndicator("Ingestion", "Not Started", "#666666")
+        self.ingestion_indicator = StatusIndicator("Ingestion", "Not Started", _p.text_muted)
         status_layout.addWidget(self.ingestion_indicator, 2, 0)
 
         # Model Integrity
-        self.integrity_indicator = StatusIndicator("Model Integrity", "Unknown", "#888888")
+        self.integrity_indicator = StatusIndicator("Model Integrity", "Unknown", _p.text_muted)
         status_layout.addWidget(self.integrity_indicator, 2, 1)
 
         # Online Enrichment
-        self.online_indicator = StatusIndicator("Online Enrichment", "Disabled", "#4CAF50")
+        self.online_indicator = StatusIndicator("Online Enrichment", "Disabled", _p.success)
         status_layout.addWidget(self.online_indicator, 3, 0)
 
         # Noise Suppression
-        self.noise_indicator = StatusIndicator("Noise Suppression", "0 suppressed", "#2196F3")
+        self.noise_indicator = StatusIndicator("Noise Suppression", "0 suppressed", _p.info)
         status_layout.addWidget(self.noise_indicator, 3, 1)
 
         # Model Drift (Phase-2 monitor)
-        self.drift_indicator = StatusIndicator("Model Drift", "Unavailable", "#666666")
+        self.drift_indicator = StatusIndicator("Model Drift", "Unavailable", _p.text_muted)
         status_layout.addWidget(self.drift_indicator, 4, 0)
         
         status_group.setLayout(status_layout)
@@ -301,20 +284,6 @@ class ConfigPanel(QWidget):
 
         # Threat Intelligence Providers Section
         providers_group = QGroupBox("Threat Intelligence Providers")
-        providers_group.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                border: 1px solid #444444;
-                border-radius: 5px;
-                margin-top: 10px;
-                padding-top: 10px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px;
-            }
-        """)
         providers_layout = QVBoxLayout()
         providers_layout.setSpacing(5)
 
@@ -327,24 +296,24 @@ class ConfigPanel(QWidget):
             ("shodan", "Shodan"),
             ("report_llm", "Report LLM"),
         ):
-            indicator = StatusIndicator(label, "Unknown", "#888888")
+            indicator = StatusIndicator(label, "Unknown", _palette().text_muted)
             self._provider_indicators[key] = indicator
             providers_layout.addWidget(indicator)
 
         self.check_providers_button = QPushButton("Check connectivity")
-        self.check_providers_button.setStyleSheet("""
-            QPushButton {
-                background-color: #2196F3;
-                color: #ffffff;
+        self.check_providers_button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {_palette().info};
+                color: {_palette().text_inverse};
                 border: none;
                 border-radius: 4px;
                 padding: 6px 12px;
                 font-weight: bold;
-            }
-            QPushButton:disabled {
-                background-color: #555555;
-                color: #999999;
-            }
+            }}
+            QPushButton:disabled {{
+                background-color: {_palette().surface_alt};
+                color: {_palette().text_muted};
+            }}
         """)
         self.check_providers_button.clicked.connect(self._on_check_providers)
         providers_layout.addWidget(self.check_providers_button)
@@ -358,7 +327,9 @@ class ConfigPanel(QWidget):
             "Only the system logs toggle can be modified. All other indicators are read-only. "
             "Use 'Check connectivity' to probe threat-intelligence providers (requires online enrichment)."
         )
-        info_label.setStyleSheet("color: #666666; font-style: italic;")
+        info_label.setStyleSheet(
+            f"color: {_palette().text_muted}; font-style: italic;"
+        )
         info_label.setWordWrap(True)
         layout.addWidget(info_label)
         
@@ -376,9 +347,9 @@ class ConfigPanel(QWidget):
     def _update_logs_indicator(self, enabled: bool):
         """Update system logs status indicator"""
         if enabled:
-            self.logs_indicator.update_status("Enabled", "#4CAF50")
+            self.logs_indicator.update_status("Enabled", _palette().success)
         else:
-            self.logs_indicator.update_status("Disabled", "#666666")
+            self.logs_indicator.update_status("Disabled", _palette().text_muted)
     
     def _refresh_status(self):
         """Refresh all status indicators"""
@@ -392,13 +363,13 @@ class ConfigPanel(QWidget):
             reader = SystemLogReader()
             perm_check = reader.validate_system_log_access()
             if perm_check.has_permission:
-                self.perm_indicator.update_status("OK", "#4CAF50")
+                self.perm_indicator.update_status("OK", _palette().success)
             elif perm_check.requires_elevation:
-                self.perm_indicator.update_status("Elevation Required", "#FFC107")
+                self.perm_indicator.update_status("Elevation Required", _palette().warning)
             else:
-                self.perm_indicator.update_status("Limited", "#FFC107")
+                self.perm_indicator.update_status("Limited", _palette().warning)
         except Exception:
-            self.perm_indicator.update_status("Unknown", "#888888")
+            self.perm_indicator.update_status("Unknown", _palette().text_muted)
         
         # Kill Switch (using centralized governance state for color consistency)
         if self.kill_switch.is_active():
@@ -427,35 +398,35 @@ class ConfigPanel(QWidget):
                 dedup = stats.get("deduplication", {})
 
                 if integrity.get("is_valid") is False:
-                    self.integrity_indicator.update_status("Failed", "#f44336")
+                    self.integrity_indicator.update_status("Failed", _palette().danger)
                 elif strict:
                     verified = len(integrity.get("verified_files", []))
-                    self.integrity_indicator.update_status(f"Strict ({verified} verified)", "#4CAF50")
+                    self.integrity_indicator.update_status(f"Strict ({verified} verified)", _palette().success)
                 else:
-                    self.integrity_indicator.update_status("Dev Mode", "#2196F3")
+                    self.integrity_indicator.update_status("Dev Mode", _palette().info)
 
                 if online:
-                    self.online_indicator.update_status("Enabled", "#FFC107")
+                    self.online_indicator.update_status("Enabled", _palette().warning)
                 else:
-                    self.online_indicator.update_status("Disabled", "#4CAF50")
+                    self.online_indicator.update_status("Disabled", _palette().success)
 
                 suppressed = dedup.get("suppressed_count", 0)
-                self.noise_indicator.update_status(f"{suppressed} suppressed", "#2196F3")
+                self.noise_indicator.update_status(f"{suppressed} suppressed", _palette().info)
 
                 self._update_drift_indicator()
             except Exception:
-                self.ingestion_indicator.update_status("Unknown", "#888888")
-                self.integrity_indicator.update_status("Unknown", "#888888")
-                self.online_indicator.update_status("Unknown", "#888888")
-                self.noise_indicator.update_status("Unknown", "#888888")
-                self.drift_indicator.update_status("Unknown", "#888888")
+                self.ingestion_indicator.update_status("Unknown", _palette().text_muted)
+                self.integrity_indicator.update_status("Unknown", _palette().text_muted)
+                self.online_indicator.update_status("Unknown", _palette().text_muted)
+                self.noise_indicator.update_status("Unknown", _palette().text_muted)
+                self.drift_indicator.update_status("Unknown", _palette().text_muted)
         else:
             not_started_cfg = INGESTION_STATES["not_started"]
             self.ingestion_indicator.update_status(not_started_cfg.label, not_started_cfg.color)
-            self.integrity_indicator.update_status("Unknown", "#888888")
-            self.online_indicator.update_status("Disabled", "#4CAF50")
-            self.noise_indicator.update_status("0 suppressed", "#2196F3")
-            self.drift_indicator.update_status("Unavailable", "#666666")
+            self.integrity_indicator.update_status("Unknown", _palette().text_muted)
+            self.online_indicator.update_status("Disabled", _palette().success)
+            self.noise_indicator.update_status("0 suppressed", _palette().info)
+            self.drift_indicator.update_status("Unavailable", _palette().text_muted)
 
         # Threat-intelligence provider statuses
         self._refresh_providers()
@@ -467,28 +438,32 @@ class ConfigPanel(QWidget):
         except Exception:
             status = None
         if not status or not status.get("available"):
-            self.drift_indicator.update_status("Unavailable", "#666666")
+            self.drift_indicator.update_status("Unavailable", _palette().text_muted)
             return
         level = status.get("level")
         if not level:
-            self.drift_indicator.update_status("Collecting data", "#2196F3")
+            self.drift_indicator.update_status("Collecting data", _palette().info)
             return
+        p = _palette()
         color = {
-            "NONE": "#4CAF50",
-            "LOW": "#4CAF50",
-            "MODERATE": "#FFC107",
-            "HIGH": "#f44336",
-            "CRITICAL": "#f44336",
-        }.get(str(level).upper(), "#888888")
+            "NONE": p.success,
+            "LOW": p.success,
+            "MODERATE": p.warning,
+            "HIGH": p.danger,
+            "CRITICAL": p.danger,
+        }.get(str(level).upper(), p.text_muted)
         self.drift_indicator.update_status(str(level).title(), color)
 
-    _PROVIDER_STATE_COLORS = {
-        "Configured": "#4CAF50",
-        "Available": "#4CAF50",
-        "Missing key": "#FFC107",
-        "Disabled": "#666666",
-        "Offline": "#f44336",
-    }
+    @staticmethod
+    def _provider_state_colors() -> dict:
+        p = _palette()
+        return {
+            "Configured": p.success,
+            "Available": p.success,
+            "Missing key": p.warning,
+            "Disabled": p.text_muted,
+            "Offline": p.danger,
+        }
 
     def _refresh_providers(self):
         """Populate provider indicators from local statuses (no network)."""
@@ -511,7 +486,7 @@ class ConfigPanel(QWidget):
                 continue
             state = status.state.value
             text = state + (f" — {status.detail}" if status.detail else "")
-            color = self._PROVIDER_STATE_COLORS.get(state, "#888888")
+            color = self._provider_state_colors().get(state, _palette().text_muted)
             indicator.update_status(text, color)
             if status.usable:
                 any_usable = True

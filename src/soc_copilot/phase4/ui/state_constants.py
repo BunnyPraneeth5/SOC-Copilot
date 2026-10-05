@@ -9,6 +9,8 @@ This module provides a single source of truth for:
 from dataclasses import dataclass
 from typing import Dict
 
+from .theme import DARK
+
 
 @dataclass
 class StateConfig:
@@ -28,9 +30,9 @@ class PipelineState:
 
 
 PIPELINE_STATES: Dict[str, StateConfig] = {
-    PipelineState.ACTIVE: StateConfig(label="Active", color="#4CAF50", icon="●"),
-    PipelineState.LOADING: StateConfig(label="Loading...", color="#ffa000", icon="○"),
-    PipelineState.INACTIVE: StateConfig(label="Inactive", color="#ff8800", icon="○"),
+    PipelineState.ACTIVE: StateConfig(label="Active", color=DARK.success, icon="●"),
+    PipelineState.LOADING: StateConfig(label="Loading...", color=DARK.sev_medium, icon="○"),
+    PipelineState.INACTIVE: StateConfig(label="Inactive", color=DARK.sev_high, icon="○"),
 }
 
 
@@ -51,11 +53,11 @@ class IngestionState:
 
 
 INGESTION_STATES: Dict[str, StateConfig] = {
-    IngestionState.ACTIVE: StateConfig(label="Active", color="#2196F3", icon="●"),
-    IngestionState.IDLE: StateConfig(label="Idle", color="#888888", icon="○"),
-    IngestionState.CONFIGURED: StateConfig(label="Configured", color="#2196F3", icon="○"),
-    IngestionState.NOT_STARTED: StateConfig(label="Not Started", color="#666666", icon="○"),
-    IngestionState.STOPPED: StateConfig(label="Stopped", color="#FFC107", icon="○"),
+    IngestionState.ACTIVE: StateConfig(label="Active", color=DARK.info, icon="●"),
+    IngestionState.IDLE: StateConfig(label="Idle", color=DARK.text_muted, icon="○"),
+    IngestionState.CONFIGURED: StateConfig(label="Configured", color=DARK.info, icon="○"),
+    IngestionState.NOT_STARTED: StateConfig(label="Not Started", color=DARK.text_muted, icon="○"),
+    IngestionState.STOPPED: StateConfig(label="Stopped", color=DARK.warning, icon="○"),
 }
 
 
@@ -80,9 +82,9 @@ class GovernanceState:
 
 
 GOVERNANCE_STATES: Dict[str, StateConfig] = {
-    GovernanceState.OK: StateConfig(label="OK", color="#4CAF50", icon="✓"),
-    GovernanceState.LIMITED: StateConfig(label="Limited", color="#FFC107", icon="⚠"),
-    GovernanceState.HALTED: StateConfig(label="Halted", color="#ff4444", icon="🛑"),
+    GovernanceState.OK: StateConfig(label="OK", color=DARK.success, icon="✓"),
+    GovernanceState.LIMITED: StateConfig(label="Limited", color=DARK.warning, icon="⚠"),
+    GovernanceState.HALTED: StateConfig(label="Halted", color=DARK.sev_critical, icon="🛑"),
 }
 
 

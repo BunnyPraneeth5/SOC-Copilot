@@ -7,6 +7,12 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont, QColor
 
+from .theme import ThemeManager, severity_color
+
+
+def _palette():
+    return ThemeManager.instance().palette
+
 
 class AlertsView(QWidget):
     """Scalable alerts table with filtering and incremental updates"""
@@ -73,7 +79,9 @@ class AlertsView(QWidget):
         # Empty state label
         self.empty_label = QLabel("")
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.empty_label.setStyleSheet("color: #888888; font-style: italic; padding: 20px;")
+        self.empty_label.setStyleSheet(
+            f"color: {_palette().text_muted}; font-style: italic; padding: 20px;"
+        )
         self.empty_label.setFont(QFont("Segoe UI", 12))
         layout.addWidget(self.empty_label)
         
@@ -87,10 +95,11 @@ class AlertsView(QWidget):
         title_layout = QVBoxLayout()
         title = QLabel("🚨 Alerts")
         title.setFont(QFont("Segoe UI", 16, QFont.Weight.Bold))
-        title.setStyleSheet("color: #ffffff;")
-        
+
         self.counter_label = QLabel("Loading...")
-        self.counter_label.setStyleSheet("color: #888888; font-size: 11px;")
+        self.counter_label.setStyleSheet(
+            f"color: {_palette().text_muted}; font-size: 11px;"
+        )
         
         title_layout.addWidget(title)
         title_layout.addWidget(self.counter_label)
@@ -100,27 +109,30 @@ class AlertsView(QWidget):
         
         # Priority filter
         filter_label = QLabel("Filter:")
-        filter_label.setStyleSheet("color: #888888; font-size: 12px;")
+        filter_label.setStyleSheet(
+            f"color: {_palette().text_muted}; font-size: 12px;"
+        )
         header.addWidget(filter_label)
         
         self.priority_filter = QComboBox()
         self.priority_filter.addItems(["All", "Critical", "High", "Medium", "Low"])
-        self.priority_filter.setStyleSheet("""
-            QComboBox {
-                background-color: #1a2744;
-                color: #ffffff;
-                border: 1px solid #2a3f5f;
+        p = _palette()
+        self.priority_filter.setStyleSheet(f"""
+            QComboBox {{
+                background-color: {p.surface_alt};
+                color: {p.text};
+                border: 1px solid {p.scrollbar};
                 border-radius: 4px;
                 padding: 5px 10px;
                 min-width: 100px;
-            }
-            QComboBox::drop-down { border: none; }
-            QComboBox QAbstractItemView {
-                background-color: #1a2744;
-                color: #ffffff;
-                selection-background-color: #00d4ff;
-                selection-color: #0a0a1a;
-            }
+            }}
+            QComboBox::drop-down {{ border: none; }}
+            QComboBox QAbstractItemView {{
+                background-color: {p.surface_alt};
+                color: {p.text};
+                selection-background-color: {p.accent};
+                selection-color: {p.text_inverse};
+            }}
         """)
         self.priority_filter.currentTextChanged.connect(self._on_filter_changed)
         header.addWidget(self.priority_filter)
@@ -128,15 +140,15 @@ class AlertsView(QWidget):
         # Search box
         self.search_box = QLineEdit()
         self.search_box.setPlaceholderText("Search...")
-        self.search_box.setStyleSheet("""
-            QLineEdit {
-                background-color: #1a2744;
-                color: #ffffff;
-                border: 1px solid #2a3f5f;
+        self.search_box.setStyleSheet(f"""
+            QLineEdit {{
+                background-color: {p.surface_alt};
+                color: {p.text};
+                border: 1px solid {p.scrollbar};
                 border-radius: 4px;
                 padding: 5px 10px;
                 min-width: 150px;
-            }
+            }}
         """)
         self.search_box.textChanged.connect(self._on_search_changed)
         header.addWidget(self.search_box)
@@ -144,16 +156,16 @@ class AlertsView(QWidget):
         # Refresh button
         refresh_btn = QPushButton("🔄")
         refresh_btn.setToolTip("Refresh alerts")
-        refresh_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #1a2744;
-                color: #ffffff;
-                border: 1px solid #2a3f5f;
+        refresh_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {p.surface_alt};
+                color: {p.text};
+                border: 1px solid {p.scrollbar};
                 border-radius: 4px;
                 padding: 5px 10px;
                 font-size: 14px;
-            }
-            QPushButton:hover { background-color: #2a3f5f; }
+            }}
+            QPushButton:hover {{ background-color: {p.scrollbar}; }}
         """)
         refresh_btn.clicked.connect(self.refresh)
         header.addWidget(refresh_btn)
@@ -426,15 +438,11 @@ class AlertsView(QWidget):
 
         priority_lower = priority.lower()
         if in_flight:
-            color = QColor("#777777")
-        elif "critical" in priority_lower:
-            color = QColor("#ff4444")
-        elif "high" in priority_lower:
-            color = QColor("#ff8800")
-        elif "medium" in priority_lower:
-            color = QColor("#ffaa00")
+            color = QColor(_palette().sev_info)
+        elif any(k in priority_lower for k in ("critical", "high", "medium")):
+            color = QColor(severity_color(priority))
         else:
-            color = QColor("#ffffff")
+            color = QColor(_palette().text)
 
         for col in range(self.ACTION_COLUMN):
             item = self.table.item(row, col)
@@ -451,43 +459,44 @@ class AlertsView(QWidget):
         in_flight = self.bridge.is_investigation_in_flight(source_ip)
         is_invalid_ip = not source_ip or source_ip.upper() == "N/A"
         
+        p = _palette()
         if in_flight:
             btn.setEnabled(False)
             btn.setText("Investigating...")
-            btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #2a3f5f;
-                    color: #888888;
-                    border: 1px solid #2a3f5f;
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {p.scrollbar};
+                    color: {p.text_muted};
+                    border: 1px solid {p.scrollbar};
                     border-radius: 4px;
                     padding: 2px 8px;
-                }
+                }}
             """)
         elif is_invalid_ip:
             btn.setEnabled(False)
             btn.setText("N/A")
-            btn.setStyleSheet("""
-                QPushButton {
+            btn.setStyleSheet(f"""
+                QPushButton {{
                     background-color: transparent;
-                    color: #555555;
+                    color: {p.text_muted};
                     border: none;
-                }
+                }}
             """)
         else:
             btn.setEnabled(True)
             btn.setText("Investigate")
-            btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #00d4ff;
-                    color: #0a0a1a;
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {p.accent};
+                    color: {p.text_inverse};
                     border: none;
                     border-radius: 4px;
                     padding: 2px 8px;
                     font-weight: bold;
-                }
-                QPushButton:hover {
-                    background-color: #00b4df;
-                }
+                }}
+                QPushButton:hover {{
+                    background-color: {p.accent_hover};
+                }}
             """)
 
     def _reapply_in_flight_row_state(self):

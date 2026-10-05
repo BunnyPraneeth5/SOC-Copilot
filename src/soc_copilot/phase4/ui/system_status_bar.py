@@ -15,18 +15,27 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont, QColor
 
+from .theme import ThemeManager, set_role
+
+
+def _palette():
+    return ThemeManager.instance().palette
+
 
 class StatusIndicator(QWidget):
     """LED-style status indicator with label and tooltip expansion"""
-    
-    COLORS = {
-        "green": "#4CAF50",
-        "yellow": "#FFC107", 
-        "red": "#f44336",
-        "blue": "#2196F3",
-        "gray": "#757575"
-    }
-    
+
+    @staticmethod
+    def _color_for(name: str) -> str:
+        p = _palette()
+        return {
+            "green": p.success,
+            "yellow": p.warning,
+            "red": p.danger,
+            "blue": p.info,
+            "gray": p.sev_low,
+        }.get(name, p.sev_low)
+
     def __init__(self, label: str, initial_color: str = "gray"):
         super().__init__()
         self._color = initial_color
@@ -47,19 +56,18 @@ class StatusIndicator(QWidget):
         # Label
         self.label = QLabel(label)
         self.label.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
-        self.label.setStyleSheet("color: #ffffff;")
         layout.addWidget(self.label)
-        
+
         # Value
         self.value = QLabel("")
         self.value.setFont(QFont("Segoe UI", 10))
-        self.value.setStyleSheet("color: #00d4ff;")
+        self.value.setStyleSheet(f"color: {_palette().accent};")
         layout.addWidget(self.value)
-        
+
         # Info icon for tooltip
         self.info_icon = QLabel("ⓘ")
         self.info_icon.setFont(QFont("Segoe UI", 9))
-        self.info_icon.setStyleSheet("color: #555555;")
+        set_role(self.info_icon, "muted")
         self.info_icon.setCursor(Qt.CursorShape.WhatsThisCursor)
         self.info_icon.setVisible(False)
         layout.addWidget(self.info_icon)
@@ -68,7 +76,7 @@ class StatusIndicator(QWidget):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
     
     def _update_led_style(self):
-        color = self.COLORS.get(self._color, self.COLORS["gray"])
+        color = self._color_for(self._color)
         # Text shadow for glow effect
         self.led.setStyleSheet(f"""
             color: {color};
@@ -92,11 +100,11 @@ class StatusIndicator(QWidget):
     
     def enterEvent(self, event):
         if self._details:
-            self.info_icon.setStyleSheet("color: #00d4ff;")
+            self.info_icon.setStyleSheet(f"color: {_palette().accent};")
         super().enterEvent(event)
-    
+
     def leaveEvent(self, event):
-        self.info_icon.setStyleSheet("color: #555555;")
+        self.info_icon.setStyleSheet(f"color: {_palette().text_muted};")
         super().leaveEvent(event)
 
 
@@ -118,11 +126,11 @@ class SystemStatusBar(QFrame):
         self._init_polling()
     
     def _init_ui(self):
-        self.setStyleSheet("""
-            QFrame {
-                background-color: #0a1225;
-                border-bottom: 1px solid #1a2744;
-            }
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {_palette().input_bg};
+                border-bottom: 1px solid {_palette().surface_alt};
+            }}
         """)
         self.setFixedHeight(44)
         
@@ -160,7 +168,7 @@ class SystemStatusBar(QFrame):
         # Results count (compact)
         self.results_label = QLabel("📊 0 results")
         self.results_label.setFont(QFont("Segoe UI", 10))
-        self.results_label.setStyleSheet("color: #888888;")
+        set_role(self.results_label, "muted")
         layout.addWidget(self.results_label)
         
         # Separator
@@ -169,14 +177,14 @@ class SystemStatusBar(QFrame):
         # Last update time
         self.update_time = QLabel("")
         self.update_time.setFont(QFont("Segoe UI", 9))
-        self.update_time.setStyleSheet("color: #555555;")
+        set_role(self.update_time, "muted")
         layout.addWidget(self.update_time)
         
         self.setLayout(layout)
     
     def _separator(self) -> QLabel:
         sep = QLabel("|")
-        sep.setStyleSheet("color: #1a2744;")
+        sep.setStyleSheet(f"color: {_palette().surface_alt};")
         return sep
     
     def _init_polling(self):
@@ -330,13 +338,13 @@ class PermissionBanner(QFrame):
         self._init_ui(message, icon)
     
     def _init_ui(self, message: str, icon: str):
-        self.setStyleSheet("""
-            QFrame {
-                background-color: #2d2d00;
-                border: 1px solid #665c00;
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {_palette().warning_bg};
+                border: 1px solid {_palette().warning};
                 border-radius: 6px;
                 margin: 5px 15px;
-            }
+            }}
         """)
         
         layout = QHBoxLayout()
@@ -347,14 +355,14 @@ class PermissionBanner(QFrame):
         layout.addWidget(icon_label)
         
         msg_label = QLabel(message)
-        msg_label.setStyleSheet("color: #ffcc00; font-size: 12px;")
+        msg_label.setStyleSheet(f"color: {_palette().warning}; font-size: 12px;")
         msg_label.setWordWrap(True)
         layout.addWidget(msg_label, 1)
-        
+
         # Action button
         action_btn = QLabel("Run as Admin")
-        action_btn.setStyleSheet("""
-            color: #ffcc00;
+        action_btn.setStyleSheet(f"""
+            color: {_palette().warning};
             font-size: 11px;
             text-decoration: underline;
             padding: 5px 10px;
@@ -364,7 +372,9 @@ class PermissionBanner(QFrame):
         
         # Close button
         close_btn = QLabel("✕")
-        close_btn.setStyleSheet("color: #888; font-size: 14px; padding: 5px;")
+        close_btn.setStyleSheet(
+            f"color: {_palette().text_muted}; font-size: 14px; padding: 5px;"
+        )
         close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         close_btn.mousePressEvent = lambda e: self._dismiss()
         layout.addWidget(close_btn)
@@ -384,14 +394,15 @@ class KillSwitchBanner(QFrame):
         self._init_ui()
     
     def _init_ui(self):
-        self.setStyleSheet("""
-            QFrame {
+        p = _palette()
+        self.setStyleSheet(f"""
+            QFrame {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #4a0000, stop:1 #2d0000);
-                border: 2px solid #ff0000;
+                    stop:0 {p.danger_bg}, stop:1 {p.danger_bg});
+                border: 2px solid {p.danger};
                 border-radius: 6px;
                 margin: 5px 15px;
-            }
+            }}
         """)
         
         layout = QHBoxLayout()
@@ -402,11 +413,13 @@ class KillSwitchBanner(QFrame):
         layout.addWidget(icon_label)
         
         msg = QLabel("KILL SWITCH ACTIVE")
-        msg.setStyleSheet("color: #ff4444; font-size: 14px; font-weight: bold;")
+        msg.setStyleSheet(
+            f"color: {_palette().sev_critical}; font-size: 14px; font-weight: bold;"
+        )
         layout.addWidget(msg)
-        
+
         desc = QLabel("All ML processing halted • Edit config/kill_switch.yaml to disable")
-        desc.setStyleSheet("color: #ff8888; font-size: 11px;")
+        desc.setStyleSheet(f"color: {_palette().danger}; font-size: 11px;")
         layout.addWidget(desc, 1)
         
         self.setLayout(layout)

@@ -74,6 +74,11 @@ def main() -> int:
         
         # Launch UI
         app = QApplication(sys.argv)
+
+        # Apply central theme (dark default)
+        from soc_copilot.phase4.ui.theme import ThemeManager
+        ThemeManager.instance().apply(app)
+
         window = MainWindow(controller)
         window.show()
         

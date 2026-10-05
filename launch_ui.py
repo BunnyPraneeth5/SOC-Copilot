@@ -218,7 +218,11 @@ def main():
         
         # Create and configure QApplication
         app = QApplication(sys.argv)
-        
+
+        # Apply central theme (dark default)
+        from soc_copilot.phase4.ui.theme import ThemeManager
+        ThemeManager.instance().apply(app)
+
         # Set application properties
         app.setApplicationName("SOC Copilot")
         from soc_copilot import __version__

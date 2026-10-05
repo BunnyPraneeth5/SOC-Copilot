@@ -8,17 +8,27 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QPropertyAnimation, QEasingCurv
 from PyQt6.QtGui import QFont, QColor
 from datetime import datetime
 
+from .theme import ThemeManager, set_role
+
+
+def _palette():
+    return ThemeManager.instance().palette
+
 
 class ThreatLevelBanner(QFrame):
     """Primary visual hierarchy - shows overall threat level at a glance"""
-    
-    THREAT_LEVELS = {
-        "critical": {"bg": "#1a0000", "fg": "#ff4444", "border": "#ff4444", "icon": "⚫", "label": "CRITICAL"},
-        "high": {"bg": "#2d1a00", "fg": "#ff8800", "border": "#ff8800", "icon": "🔴", "label": "HIGH"},
-        "elevated": {"bg": "#2d2d00", "fg": "#ffaa00", "border": "#ffaa00", "icon": "🟡", "label": "ELEVATED"},
-        "clear": {"bg": "#0d2818", "fg": "#4CAF50", "border": "#4CAF50", "icon": "🟢", "label": "NORMAL"}
-    }
-    
+
+    @staticmethod
+    def _level_config(level: str) -> dict:
+        p = _palette()
+        levels = {
+            "critical": {"bg": p.danger_bg, "fg": p.sev_critical, "border": p.sev_critical, "icon": "⚫", "label": "CRITICAL"},
+            "high": {"bg": p.warning_bg, "fg": p.sev_high, "border": p.sev_high, "icon": "🔴", "label": "HIGH"},
+            "elevated": {"bg": p.warning_bg, "fg": p.sev_medium, "border": p.sev_medium, "icon": "🟡", "label": "ELEVATED"},
+            "clear": {"bg": p.success_bg, "fg": p.success, "border": p.success, "icon": "🟢", "label": "NORMAL"}
+        }
+        return levels.get(level, levels["clear"])
+
     view_alerts_clicked = pyqtSignal()
     
     def __init__(self):
@@ -59,7 +69,7 @@ class ThreatLevelBanner(QFrame):
         
         self.threat_value = QLabel("CLEAR")
         self.threat_value.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
-        self.threat_value.setStyleSheet("color: #4CAF50;")
+        self.threat_value.setStyleSheet(f"color: {_palette().success};")
         threat_layout.addWidget(self.threat_value)
         
         self.threat_container.setLayout(threat_layout)
@@ -115,11 +125,11 @@ class ThreatLevelBanner(QFrame):
         self.setGraphicsEffect(shadow)
     
     def _apply_style(self, level: str):
-        config = self.THREAT_LEVELS.get(level, self.THREAT_LEVELS["clear"])
+        config = self._level_config(level)
         self.setStyleSheet(f"""
             QFrame {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 {config['bg']}, stop:1 #0a0a1a);
+                    stop:0 {config['bg']}, stop:1 {_palette().bg});
                 border: 2px solid {config['border']};
                 border-radius: 12px;
             }}
@@ -140,7 +150,7 @@ class ThreatLevelBanner(QFrame):
             level = "clear"
             action_text = "No actionable threats • Routine activity only"
         
-        config = self.THREAT_LEVELS[level]
+        config = self._level_config(level)
         self._current_level = level
         self._action_count = total
         
@@ -161,14 +171,17 @@ class RecentAlertItem(QFrame):
     """Single alert item in the recent alerts timeline"""
     
     clicked = pyqtSignal(str, str)  # batch_id, classification
-    
-    PRIORITY_COLORS = {
-        "critical": "#ff4444",
-        "high": "#ff8800",
-        "medium": "#ffaa00",
-        "low": "#4CAF50"
-    }
-    
+
+    @staticmethod
+    def _priority_color(priority: str) -> str:
+        p = _palette()
+        return {
+            "critical": p.sev_critical,
+            "high": p.sev_high,
+            "medium": p.sev_medium,
+            "low": p.success,
+        }.get(priority.lower(), p.text_muted)
+
     def __init__(self, batch_id: str, classification: str, priority: str, 
                  source_ip: str, timestamp: str):
         super().__init__()
@@ -179,17 +192,18 @@ class RecentAlertItem(QFrame):
         self._init_ui(classification, priority, source_ip, timestamp)
     
     def _init_ui(self, classification: str, priority: str, source_ip: str, timestamp: str):
-        color = self.PRIORITY_COLORS.get(self.priority, "#888888")
-        
+        p = _palette()
+        color = self._priority_color(self.priority)
+
         self.setStyleSheet(f"""
             QFrame {{
-                background-color: #16213e;
+                background-color: {p.surface};
                 border-left: 4px solid {color};
                 border-radius: 6px;
                 margin: 2px 0;
             }}
             QFrame:hover {{
-                background-color: #1a2744;
+                background-color: {p.surface_alt};
             }}
         """)
         
@@ -212,27 +226,27 @@ class RecentAlertItem(QFrame):
         # Classification
         class_label = QLabel(classification)
         class_label.setFont(QFont("Segoe UI", 11))
-        class_label.setStyleSheet("color: #ffffff;")
         class_label.setWordWrap(True)
         layout.addWidget(class_label, 1)
-        
+
         # Source IP
         if source_ip:
             ip_label = QLabel(source_ip)
             ip_label.setFont(QFont("Consolas", 10))
-            ip_label.setStyleSheet("color: #888888;")
+            set_role(ip_label, "muted")
             layout.addWidget(ip_label)
-        
+
         # Timestamp
         time_label = QLabel(timestamp)
         time_label.setFont(QFont("Segoe UI", 10))
-        time_label.setStyleSheet("color: #555555;")
+        set_role(time_label, "muted")
         time_label.setAlignment(Qt.AlignmentFlag.AlignRight)
         layout.addWidget(time_label)
-        
+
         # Arrow
         arrow = QLabel("→")
-        arrow.setStyleSheet("color: #555555; font-size: 14px;")
+        set_role(arrow, "muted")
+        arrow.setStyleSheet("font-size: 14px;")
         layout.addWidget(arrow)
         
         self.setLayout(layout)
@@ -257,52 +271,36 @@ class RecentAlertsTimeline(QFrame):
         self._init_ui()
     
     def _init_ui(self):
-        self.setStyleSheet("""
-            QFrame {
-                background-color: #0f1629;
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {_palette().input_bg};
                 border-radius: 10px;
-            }
+            }}
         """)
-        
+
         layout = QVBoxLayout()
         layout.setContentsMargins(15, 15, 15, 15)
         layout.setSpacing(10)
-        
+
         # Header
         header = QHBoxLayout()
-        
+
         title = QLabel("📋 Recent Alerts")
         title.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
-        title.setStyleSheet("color: #ffffff;")
         header.addWidget(title)
-        
+
         header.addStretch()
-        
+
         self.count_label = QLabel("0 alerts")
         self.count_label.setFont(QFont("Segoe UI", 11))
-        self.count_label.setStyleSheet("color: #888888;")
+        set_role(self.count_label, "muted")
         header.addWidget(self.count_label)
-        
+
         layout.addLayout(header)
-        
-        # Scroll area for alerts
+
+        # Scroll area for alerts (scrollbar styling comes from the global QSS)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("""
-            QScrollArea { border: none; background: transparent; }
-            QScrollBar:vertical {
-                background-color: #0a0a1a;
-                width: 6px;
-                border-radius: 3px;
-            }
-            QScrollBar::handle:vertical {
-                background-color: #2a3f5f;
-                border-radius: 3px;
-                min-height: 20px;
-            }
-            QScrollBar::handle:vertical:hover { background-color: #3a5f8f; }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-        """)
         
         self.alerts_container = QWidget()
         self.alerts_layout = QVBoxLayout()
@@ -335,13 +333,13 @@ class RecentAlertsTimeline(QFrame):
         
         title = QLabel("No Alerts")
         title.setFont(QFont("Segoe UI", 16, QFont.Weight.Bold))
-        title.setStyleSheet("color: #888888;")
+        set_role(title, "muted")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         empty_layout.addWidget(title)
-        
+
         desc = QLabel("Analyzed logs show routine activity.\nUpload logs or wait for new data.")
         desc.setFont(QFont("Segoe UI", 11))
-        desc.setStyleSheet("color: #666666;")
+        set_role(desc, "muted")
         desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
         empty_layout.addWidget(desc)
         
@@ -397,11 +395,12 @@ class EmptyStateCard(QFrame):
     def _init_ui(self, icon: str, title: str, description: str, 
                  action_text: str, state_type: str):
         
+        p = _palette()
         colors = {
-            "info": {"bg": "#16213e", "title": "#00d4ff", "border": "#1a2744"},
-            "warning": {"bg": "#2d2d00", "title": "#ffaa00", "border": "#665c00"},
-            "error": {"bg": "#2d1a1a", "title": "#ff4444", "border": "#4a0000"},
-            "success": {"bg": "#0d2818", "title": "#4CAF50", "border": "#1a4d26"}
+            "info": {"bg": p.surface, "title": p.accent, "border": p.surface_alt},
+            "warning": {"bg": p.warning_bg, "title": p.sev_medium, "border": p.warning},
+            "error": {"bg": p.danger_bg, "title": p.sev_critical, "border": p.danger},
+            "success": {"bg": p.success_bg, "title": p.success, "border": p.success}
         }
         config = colors.get(state_type, colors["info"])
         
@@ -431,7 +430,7 @@ class EmptyStateCard(QFrame):
         
         desc_label = QLabel(description)
         desc_label.setFont(QFont("Segoe UI", 12))
-        desc_label.setStyleSheet("color: #888888;")
+        set_role(desc_label, "muted")
         desc_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         desc_label.setWordWrap(True)
         layout.addWidget(desc_label)
@@ -442,7 +441,7 @@ class EmptyStateCard(QFrame):
             action_btn.setStyleSheet(f"""
                 QPushButton {{
                     background-color: {config['title']};
-                    color: #0a0a1a;
+                    color: {_palette().text_inverse};
                     border: none;
                     padding: 12px 30px;
                     border-radius: 8px;
@@ -478,7 +477,6 @@ class QuickActionsBar(QFrame):
                 background-color: transparent;
             }
         """)
-        
         layout = QHBoxLayout()
         layout.setContentsMargins(0, 5, 0, 5)
         layout.setSpacing(15)
@@ -511,35 +509,36 @@ class QuickActionsBar(QFrame):
         btn = QPushButton(text)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         
+        p = _palette()
         if primary:
-            btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #00d4ff;
-                    color: #0a0a1a;
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {p.accent};
+                    color: {p.text_inverse};
                     border: none;
                     padding: 12px 24px;
                     border-radius: 8px;
                     font-size: 13px;
                     font-weight: bold;
-                }
-                QPushButton:hover { background-color: #00a8cc; }
-                QPushButton:pressed { background-color: #0088aa; }
+                }}
+                QPushButton:hover {{ background-color: {p.accent_hover}; }}
+                QPushButton:pressed {{ background-color: {p.accent_hover}; }}
             """)
         else:
-            btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #16213e;
-                    color: #ffffff;
-                    border: 1px solid #1a2744;
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {p.surface};
+                    color: {p.text};
+                    border: 1px solid {p.surface_alt};
                     padding: 12px 24px;
                     border-radius: 8px;
                     font-size: 13px;
-                }
-                QPushButton:hover { 
-                    background-color: #1a2744;
-                    border-color: #2a3f5f;
-                }
-                QPushButton:pressed { background-color: #0f1629; }
+                }}
+                QPushButton:hover {{
+                    background-color: {p.surface_alt};
+                    border-color: {p.scrollbar};
+                }}
+                QPushButton:pressed {{ background-color: {p.input_bg}; }}
             """)
         
         return btn
@@ -559,14 +558,17 @@ class CompactMetricCard(QFrame):
     
     clicked = pyqtSignal(str)  # priority filter
     
-    PRIORITY_STYLES = {
-        "total": {"bg": "#3F51B5", "icon": "📊"},
-        "critical": {"bg": "#d32f2f", "icon": "🚨"},
-        "high": {"bg": "#f57c00", "icon": "⚠️"},
-        "medium": {"bg": "#ffa000", "icon": "📋"},
-        "low": {"bg": "#4CAF50", "icon": "✓"}
-    }
-    
+    @staticmethod
+    def _style_for(priority: str) -> dict:
+        p = _palette()
+        return {
+            "total": {"bg": p.info, "icon": "📊"},
+            "critical": {"bg": p.danger, "icon": "🚨"},
+            "high": {"bg": p.sev_high, "icon": "⚠️"},
+            "medium": {"bg": p.sev_medium, "icon": "📋"},
+            "low": {"bg": p.success, "icon": "✓"},
+        }.get(priority, {"bg": p.info, "icon": "📊"})
+
     def __init__(self, label: str, priority: str = "total"):
         super().__init__()
         self.label = label
@@ -577,7 +579,7 @@ class CompactMetricCard(QFrame):
         self._init_ui()
     
     def _init_ui(self):
-        style = self.PRIORITY_STYLES.get(self.priority, self.PRIORITY_STYLES["total"])
+        style = self._style_for(self.priority)
         
         self.setFixedHeight(90)
         self.setStyleSheet(f"""
@@ -672,22 +674,23 @@ class SystemHealthGrid(QFrame):
         self._init_ui()
     
     def _init_ui(self):
-        self.setStyleSheet("""
-            QFrame {
-                background-color: #16213e;
-                border: 1px solid #1a2744;
+        p = _palette()
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {p.surface};
+                border: 1px solid {p.surface_alt};
                 border-radius: 10px;
-            }
+            }}
         """)
-        
+
         layout = QVBoxLayout()
         layout.setContentsMargins(15, 12, 15, 12)
         layout.setSpacing(10)
-        
+
         # Header
         title = QLabel("System Health")
         title.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
-        title.setStyleSheet("color: #00d4ff;")
+        title.setStyleSheet(f"color: {p.accent};")
         layout.addWidget(title)
         
         # Status rows
@@ -704,16 +707,15 @@ class SystemHealthGrid(QFrame):
             
             status_led = QLabel(icon)
             status_led.setFont(QFont("Segoe UI", 10))
-            status_led.setStyleSheet("color: #888888;")
+            set_role(status_led, "muted")
             status_led.setFixedWidth(15)
-            
+
             name = QLabel(label)
             name.setFont(QFont("Segoe UI", 11))
-            name.setStyleSheet("color: #ffffff;")
-            
+
             value = QLabel(default_value)
             value.setFont(QFont("Segoe UI", 10))
-            value.setStyleSheet("color: #888888;")
+            set_role(value, "muted")
             value.setAlignment(Qt.AlignmentFlag.AlignRight)
             
             row.addWidget(status_led)
@@ -726,9 +728,10 @@ class SystemHealthGrid(QFrame):
         
         self.setLayout(layout)
     
-    def update_status(self, key: str, status: str, value: str, color: str = "#4CAF50"):
+    def update_status(self, key: str, status: str, value: str, color: str | None = None):
         """Update a status row"""
         if key in self.rows:
+            color = color or _palette().success
             led, val_label = self.rows[key]
             led.setStyleSheet(f"color: {color};")
             val_label.setText(value)

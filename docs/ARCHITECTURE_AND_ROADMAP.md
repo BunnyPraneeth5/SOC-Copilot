@@ -208,6 +208,7 @@ The following significant technical debt items have been explicitly addressed an
 - **Two un-unified kill switches:** Phase 3 governance uses a SQLite-backed kill switch (`phase3/governance/killswitch.py`) while Phase 4 uses a `.kill` sentinel file (`phase4/kill_switch.py`). They are not synchronized.
 - **CLI-only subsystems:** Phase 2 feedback/drift/explainer and Phase 3 governance are reachable only via the CLI; they are not wired into the PyQt6 UI.
 - **UI domain investigations:** The orchestrator supports domains, but the alerts-table double-click only reads the source-IP column.
+- **Mobile companion app:** Shelved — needs the FastAPI layer first; revisit later.
 
 ---
 
@@ -282,6 +283,29 @@ The MCP integration and its UI binding are now implemented. The following milest
   - Orchestrator reads live provider status at dispatch time; any provider that is down or unkeyed marks its corresponding agent as `Disabled` and the pipeline continues in local-only/offline mode.
 - **Risks:** Ping checks adding latency to startup; mitigate by running checks lazily on first use and caching aggressively.
 - **Status:** Not started — but the orchestrator already degrades gracefully today: it returns a local-only UNKNOWN-severity report when online enrichment is disabled, and a partial UNKNOWN-severity report when the LLM fails but at least one data agent returned data. The provider registry and status UI remain to be built.
+
+#### Milestone 5b: UI/UX Enhancements
+
+- **Goal:** Establish a central theme system and progressively improve the desktop UI's usability — theming, responsiveness, investigation ergonomics, alert triage, and platform integration — while staying on PyQt6 widgets with a dark default theme.
+- **Why it matters:** The UI currently has ~170 inline `setStyleSheet()` calls with duplicated hard-coded colours, polling-based refresh, no alert triage workflow, and no notification surface. A single source of truth for colours/fonts/spacing is a prerequisite for a light/dark toggle and every subsequent UX improvement.
+- **Ordering:** Milestone 5b runs before Milestone 6.
+- **Tasks:**
+  - **UX-1:** Central theme system — semantic `Palette` tokens, `ThemeManager` singleton, global QSS, migration of inline styles, hex-literal guard test.
+  - **UX-2:** Light/dark theme toggle (persisted) + colour-blind-safe severity palette.
+  - **UX-3:** Event-driven refresh replacing polling timers.
+  - **UX-4:** Investigation report side drawer — sections, full/partial/local-only badge, copy, Markdown export.
+  - **UX-5:** Alert triage status (New / In progress / Resolved / False positive) linked to feedback, persisted.
+  - **UX-6:** Pagination + CSV/JSON export of filtered alerts.
+  - **UX-7:** Keyboard shortcuts + IP right-click menu.
+  - **UX-8:** Desktop/tray notifications for P0/P1 alerts with mute.
+  - **UX-9:** Header status chips (enrichment, emergency stop, integrity, providers, drift).
+  - **UX-10:** Cleanup — remove unused `dashboard.py`, fix alerts-view cache key collision.
+- **Acceptance criteria:**
+  - All UI colours resolve through theme tokens (no hex literals outside `theme.py`/legacy `dashboard.py`, enforced by a test).
+  - `ThemeManager` can switch palettes at runtime via `set_theme()` and re-apply the global stylesheet.
+  - No behavioural regressions: layouts, texts, signal wiring, and the full test suite stay green.
+- **Risks:** Visual drift during migration; mitigated by mapping near-duplicate colours to the closest semantic token and screenshot-diffing key pages offscreen.
+- **Status:** In progress (UX-1 done; UX-2..UX-10 pending)
 
 #### Milestone 6: Live Workflow Visualization (PyQt6-native)
 

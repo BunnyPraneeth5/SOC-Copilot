@@ -9,6 +9,12 @@ from PyQt6.QtGui import QFont, QPixmap, QPainter, QColor, QPen
 from PyQt6.QtCore import QPointF
 from PyQt6.QtGui import QPolygonF
 
+from .theme import ThemeManager
+
+
+def _palette():
+    return ThemeManager.instance().palette
+
 
 class AboutDialog(QDialog):
     """About dialog showing application information"""
@@ -36,14 +42,14 @@ class AboutDialog(QDialog):
         # Title
         title = QLabel("SOC Copilot")
         title.setFont(QFont("Segoe UI", 24, QFont.Weight.Bold))
-        title.setStyleSheet("color: #00d4ff;")
+        title.setStyleSheet(f"color: {_palette().accent};")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
         
         # Version with beta badge
         version = QLabel(f"Version {self.VERSION}")
         version.setFont(QFont("Segoe UI", 12))
-        version.setStyleSheet("color: #888888;")
+        version.setStyleSheet(f"color: {_palette().text_muted};")
         version.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(version)
         
@@ -54,7 +60,7 @@ class AboutDialog(QDialog):
         )
         beta_label.setFont(QFont("Segoe UI", 9))
         beta_label.setStyleSheet(
-            "color: #ffa000; background-color: #2a2000; "
+            f"color: {_palette().sev_medium}; background-color: {_palette().warning_bg}; "
             "border-radius: 4px; padding: 6px;"
         )
         beta_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -67,7 +73,7 @@ class AboutDialog(QDialog):
             "Hybrid ML Detection (Isolation Forest + Random Forest)"
         )
         desc.setFont(QFont("Segoe UI", 10))
-        desc.setStyleSheet("color: #cccccc;")
+        desc.setStyleSheet(f"color: {_palette().text};")
         desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
         desc.setWordWrap(True)
         layout.addWidget(desc)
@@ -75,7 +81,7 @@ class AboutDialog(QDialog):
         # Separator
         line = QFrame()
         line.setFrameShape(QFrame.Shape.HLine)
-        line.setStyleSheet("background-color: #444444;")
+        line.setStyleSheet(f"background-color: {_palette().border};")
         layout.addWidget(line)
         
         # Features
@@ -86,14 +92,14 @@ class AboutDialog(QDialog):
             "✓ SOC-Grade Security"
         )
         features.setFont(QFont("Segoe UI", 10))
-        features.setStyleSheet("color: #aaaaaa;")
+        features.setStyleSheet(f"color: {_palette().text};")
         features.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(features)
         
         # Copyright
         copyright_label = QLabel("© 2026 SOC Copilot Team • MIT License")
         copyright_label.setFont(QFont("Segoe UI", 9))
-        copyright_label.setStyleSheet("color: #666666;")
+        copyright_label.setStyleSheet(f"color: {_palette().text_muted};")
         copyright_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(copyright_label)
         
@@ -104,18 +110,18 @@ class AboutDialog(QDialog):
         
         close_btn = QPushButton("Close")
         close_btn.setFixedWidth(100)
-        close_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #00d4ff;
-                color: #1e1e1e;
+        close_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {_palette().accent};
+                color: {_palette().text_inverse};
                 border: none;
                 padding: 8px 16px;
                 border-radius: 4px;
                 font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #00a8cc;
-            }
+            }}
+            QPushButton:hover {{
+                background-color: {_palette().accent_hover};
+            }}
         """)
         close_btn.clicked.connect(self.accept)
         btn_layout.addWidget(close_btn)
@@ -124,14 +130,14 @@ class AboutDialog(QDialog):
         
         self.setLayout(layout)
         
-        # Dialog styling
-        self.setStyleSheet("""
-            QDialog {
-                background-color: #1e1e1e;
-            }
-            QLabel {
-                color: #ffffff;
-            }
+        # Dialog styling (matches palette surface color)
+        self.setStyleSheet(f"""
+            QDialog {{
+                background-color: {_palette().surface};
+            }}
+            QLabel {{
+                color: {_palette().text};
+            }}
         """)
     
     def _create_icon_pixmap(self) -> QPixmap:
@@ -144,8 +150,8 @@ class AboutDialog(QDialog):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
         # Draw shield
-        painter.setPen(QPen(QColor("#00d4ff"), 2))
-        painter.setBrush(QColor("#1e3a5f"))
+        painter.setPen(QPen(QColor(_palette().accent), 2))
+        painter.setBrush(QColor(_palette().info_bg))
         
         x, y = 5, 5
         s = size - 10
@@ -161,7 +167,7 @@ class AboutDialog(QDialog):
         painter.drawPolygon(QPolygonF(shield_points))
         
         # Magnifying glass
-        painter.setPen(QPen(QColor("#00d4ff"), 2))
+        painter.setPen(QPen(QColor(_palette().accent), 2))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawEllipse(int(x + s*0.3), int(y + s*0.25), int(s*0.4), int(s*0.4))
         painter.drawLine(

@@ -7,6 +7,13 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont, QColor
 
+from .theme import ThemeManager
+
+
+def _palette():
+    return ThemeManager.instance().palette
+
+
 class AllLogsView(QWidget):
     """Scalable logs table for displaying all processed events"""
     
@@ -56,7 +63,9 @@ class AllLogsView(QWidget):
         # Empty state label
         self.empty_label = QLabel("No logs to display yet.")
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.empty_label.setStyleSheet("color: #888888; font-style: italic; padding: 20px;")
+        self.empty_label.setStyleSheet(
+            f"color: {_palette().text_muted}; font-style: italic; padding: 20px;"
+        )
         self.empty_label.setFont(QFont("Segoe UI", 12))
         layout.addWidget(self.empty_label)
         
@@ -68,10 +77,10 @@ class AllLogsView(QWidget):
         title_layout = QVBoxLayout()
         title = QLabel("📋 All Logs")
         title.setFont(QFont("Segoe UI", 16, QFont.Weight.Bold))
-        title.setStyleSheet("color: #ffffff;")
-        
         self.counter_label = QLabel("Loading...")
-        self.counter_label.setStyleSheet("color: #888888; font-size: 11px;")
+        self.counter_label.setStyleSheet(
+            f"color: {_palette().text_muted}; font-size: 11px;"
+        )
         
         title_layout.addWidget(title)
         title_layout.addWidget(self.counter_label)
@@ -81,27 +90,30 @@ class AllLogsView(QWidget):
         
         # Classification filter
         filter_label = QLabel("Filter:")
-        filter_label.setStyleSheet("color: #888888; font-size: 12px;")
+        filter_label.setStyleSheet(
+            f"color: {_palette().text_muted}; font-size: 12px;"
+        )
         header.addWidget(filter_label)
         
         self.class_filter = QComboBox()
         self.class_filter.addItems(["All", "Alerts Only", "Benign Only"])
-        self.class_filter.setStyleSheet("""
-            QComboBox {
-                background-color: #1a2744;
-                color: #ffffff;
-                border: 1px solid #2a3f5f;
+        p = _palette()
+        self.class_filter.setStyleSheet(f"""
+            QComboBox {{
+                background-color: {p.surface_alt};
+                color: {p.text};
+                border: 1px solid {p.scrollbar};
                 border-radius: 4px;
                 padding: 5px 10px;
                 min-width: 100px;
-            }
-            QComboBox::drop-down { border: none; }
-            QComboBox QAbstractItemView {
-                background-color: #1a2744;
-                color: #ffffff;
-                selection-background-color: #00d4ff;
-                selection-color: #0a0a1a;
-            }
+            }}
+            QComboBox::drop-down {{ border: none; }}
+            QComboBox QAbstractItemView {{
+                background-color: {p.surface_alt};
+                color: {p.text};
+                selection-background-color: {p.accent};
+                selection-color: {p.text_inverse};
+            }}
         """)
         self.class_filter.currentTextChanged.connect(self._on_filter_changed)
         header.addWidget(self.class_filter)
@@ -109,31 +121,31 @@ class AllLogsView(QWidget):
         # Search box
         self.search_box = QLineEdit()
         self.search_box.setPlaceholderText("Search raw logs...")
-        self.search_box.setStyleSheet("""
-            QLineEdit {
-                background-color: #1a2744;
-                color: #ffffff;
-                border: 1px solid #2a3f5f;
+        self.search_box.setStyleSheet(f"""
+            QLineEdit {{
+                background-color: {p.surface_alt};
+                color: {p.text};
+                border: 1px solid {p.scrollbar};
                 border-radius: 4px;
                 padding: 5px 10px;
                 min-width: 200px;
-            }
+            }}
         """)
         self.search_box.textChanged.connect(self._on_search_changed)
         header.addWidget(self.search_box)
         
         refresh_btn = QPushButton("🔄")
         refresh_btn.setToolTip("Refresh logs")
-        refresh_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #1a2744;
-                color: #ffffff;
-                border: 1px solid #2a3f5f;
+        refresh_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {p.surface_alt};
+                color: {p.text};
+                border: 1px solid {p.scrollbar};
                 border-radius: 4px;
                 padding: 5px 10px;
                 font-size: 14px;
-            }
-            QPushButton:hover { background-color: #2a3f5f; }
+            }}
+            QPushButton:hover {{ background-color: {p.scrollbar}; }}
         """)
         refresh_btn.clicked.connect(self.refresh)
         header.addWidget(refresh_btn)
@@ -260,7 +272,8 @@ class AllLogsView(QWidget):
                 self.table.setItem(row, col, item)
             
             # Color coding
-            color = QColor("#ff4444") if lg["is_alert"] else QColor("#cccccc")
+            color = (QColor(_palette().sev_critical) if lg["is_alert"]
+                     else QColor(_palette().text))
             for col in range(5):
                 item = self.table.item(row, col)
                 if item:

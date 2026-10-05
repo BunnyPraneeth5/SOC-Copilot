@@ -7,6 +7,12 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 
+from .theme import ThemeManager
+
+
+def _palette():
+    return ThemeManager.instance().palette
+
 
 class AssistantPanel(QWidget):
     """Interactive chat assistant with Q&A input"""
@@ -24,22 +30,23 @@ class AssistantPanel(QWidget):
         # Header
         header = QLabel("🤖 SOC Assistant")
         header.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
-        header.setStyleSheet("color: #00d4ff;")
+        header.setStyleSheet(f"color: {_palette().accent};")
         layout.addWidget(header)
         
         # Chat display
         self.chat_display = QTextEdit()
         self.chat_display.setReadOnly(True)
-        self.chat_display.setStyleSheet("""
-            QTextEdit {
-                background-color: #1a1a2e;
-                color: #ffffff;
-                border: 1px solid #2a2a4e;
+        p = _palette()
+        self.chat_display.setStyleSheet(f"""
+            QTextEdit {{
+                background-color: {p.surface};
+                color: {p.text};
+                border: 1px solid {p.info_bg};
                 border-radius: 8px;
                 padding: 12px;
                 font-size: 13px;
                 line-height: 1.5;
-            }
+            }}
         """)
         layout.addWidget(self.chat_display)
         
@@ -60,23 +67,23 @@ class AssistantPanel(QWidget):
         
         for text, cmd in quick_actions:
             btn = QPushButton(text)
-            btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #16213e;
-                    color: #ffffff;
-                    border: 1px solid #0f3460;
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {p.surface};
+                    color: {p.text};
+                    border: 1px solid {p.info_bg};
                     border-radius: 5px;
                     padding: 8px 12px;
                     font-size: 11px;
-                }
-                QPushButton:hover {
-                    background-color: #0f3460;
-                    border-color: #00d4ff;
-                }
-                QPushButton:disabled {
-                    background-color: #1a1a2e;
-                    color: #555555;
-                }
+                }}
+                QPushButton:hover {{
+                    background-color: {p.info_bg};
+                    border-color: {p.accent};
+                }}
+                QPushButton:disabled {{
+                    background-color: {p.surface};
+                    color: {p.text_muted};
+                }}
             """)
             btn.clicked.connect(lambda checked, c=cmd: self._handle_quick_action(c))
             actions_layout.addWidget(btn)
@@ -87,42 +94,42 @@ class AssistantPanel(QWidget):
         
         # Input area
         input_frame = QFrame()
-        input_frame.setStyleSheet("""
-            QFrame {
-                background-color: #16213e;
+        input_frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: {p.surface};
                 border-radius: 8px;
-            }
+            }}
         """)
         input_layout = QHBoxLayout()
         input_layout.setContentsMargins(10, 8, 10, 8)
         
         self.input_field = QLineEdit()
         self.input_field.setPlaceholderText("Ask a question about the selected alert...")
-        self.input_field.setStyleSheet("""
-            QLineEdit {
+        self.input_field.setStyleSheet(f"""
+            QLineEdit {{
                 background-color: transparent;
                 border: none;
-                color: #ffffff;
+                color: {p.text};
                 font-size: 13px;
                 padding: 5px;
-            }
+            }}
         """)
         self.input_field.returnPressed.connect(self._handle_user_input)
         input_layout.addWidget(self.input_field)
         
         self.send_btn = QPushButton("Send")
-        self.send_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #00d4ff;
-                color: #1a1a2e;
+        self.send_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {p.accent};
+                color: {p.text_inverse};
                 border: none;
                 border-radius: 5px;
                 padding: 8px 16px;
                 font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #00a8cc;
-            }
+            }}
+            QPushButton:hover {{
+                background-color: {p.accent_hover};
+            }}
         """)
         self.send_btn.clicked.connect(self._handle_user_input)
         input_layout.addWidget(self.send_btn)
@@ -284,11 +291,12 @@ class AssistantPanel(QWidget):
         text = text.replace("\n", "<br>")
         text = text.replace("**", "<b>").replace("**", "</b>")  # Basic bold
         
+        p = _palette()
         if role == "user":
-            html = f'<div style="background-color: #0f3460; padding: 10px; border-radius: 8px; margin: 5px 0;"><span style="color: #00d4ff; font-weight: bold;">You:</span> {text}</div>'
+            html = f'<div style="background-color: {p.info_bg}; padding: 10px; border-radius: 8px; margin: 5px 0;"><span style="color: {p.accent}; font-weight: bold;">You:</span> {text}</div>'
         elif role == "assistant":
-            html = f'<div style="background-color: #16213e; padding: 10px; border-radius: 8px; margin: 5px 0;"><span style="color: #4CAF50; font-weight: bold;">Assistant:</span><br>{text}</div>'
+            html = f'<div style="background-color: {p.surface}; padding: 10px; border-radius: 8px; margin: 5px 0;"><span style="color: {p.success}; font-weight: bold;">Assistant:</span><br>{text}</div>'
         else:
-            html = f'<div style="color: #888; padding: 5px; font-style: italic;">{text}</div>'
+            html = f'<div style="color: {p.text_muted}; padding: 5px; font-style: italic;">{text}</div>'
         
         self.chat_display.append(html)

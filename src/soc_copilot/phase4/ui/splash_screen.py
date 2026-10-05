@@ -4,6 +4,12 @@ from PyQt6.QtWidgets import QSplashScreen, QApplication
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QPixmap, QPainter, QColor, QFont, QLinearGradient, QPen
 
+from .theme import ThemeManager
+
+
+def _palette():
+    return ThemeManager.instance().palette
+
 
 class SplashScreen(QSplashScreen):
     """Professional splash screen for SOC Copilot startup"""
@@ -18,15 +24,15 @@ class SplashScreen(QSplashScreen):
         """Create a professional splash screen programmatically"""
         width, height = 600, 400
         pixmap = QPixmap(width, height)
-        pixmap.fill(QColor("#1e1e1e"))
+        pixmap.fill(QColor(_palette().bg))
         
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
         # Draw gradient background accent
         gradient = QLinearGradient(0, 0, width, height)
-        gradient.setColorAt(0, QColor("#1e3a5f"))
-        gradient.setColorAt(1, QColor("#1e1e1e"))
+        gradient.setColorAt(0, QColor(_palette().info_bg))
+        gradient.setColorAt(1, QColor(_palette().bg))
         painter.fillRect(0, 0, width, 120, gradient)
         
         # Draw shield icon (simplified)
@@ -35,36 +41,36 @@ class SplashScreen(QSplashScreen):
         # Draw title "SOC Copilot"
         title_font = QFont("Segoe UI", 42, QFont.Weight.Bold)
         painter.setFont(title_font)
-        painter.setPen(QColor("#ffffff"))
+        painter.setPen(QColor(_palette().text))
         painter.drawText(170, 200, "SOC")
-        
-        painter.setPen(QColor("#00d4ff"))
+
+        painter.setPen(QColor(_palette().accent))
         painter.drawText(280, 200, "Copilot")
         
         # Draw subtitle
         subtitle_font = QFont("Segoe UI", 14)
         painter.setFont(subtitle_font)
-        painter.setPen(QColor("#888888"))
+        painter.setPen(QColor(_palette().text_muted))
         painter.drawText(170, 235, "Real-Time Security Analysis")
-        
+
         # Draw BETA badge
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#ffa000"))
+        painter.setBrush(QColor(_palette().sev_medium))
         painter.drawRoundedRect(170, 250, 55, 22, 4, 4)
         beta_font = QFont("Segoe UI", 10, QFont.Weight.Bold)
         painter.setFont(beta_font)
-        painter.setPen(QColor("#1e1e1e"))
+        painter.setPen(QColor(_palette().bg))
         painter.drawText(178, 267, "BETA")
         
         # Draw loading bar background
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#333333"))
+        painter.setBrush(QColor(_palette().border))
         painter.drawRoundedRect(50, 340, 500, 8, 4, 4)
         
         # Draw version
         version_font = QFont("Segoe UI", 10)
         painter.setFont(version_font)
-        painter.setPen(QColor("#666666"))
+        painter.setPen(QColor(_palette().text_muted))
         painter.drawText(50, 380, "Version 1.0.0-beta.1")
         
         # Draw copyright/branding
@@ -76,8 +82,8 @@ class SplashScreen(QSplashScreen):
     def _draw_shield_icon(self, painter: QPainter, x: int, y: int, size: int):
         """Draw a simplified shield icon"""
         # Shield body
-        painter.setPen(QPen(QColor("#00d4ff"), 3))
-        painter.setBrush(QColor("#1e3a5f"))
+        painter.setPen(QPen(QColor(_palette().accent), 3))
+        painter.setBrush(QColor(_palette().info_bg))
         
         # Draw shield shape using polygon
         from PyQt6.QtCore import QPointF
@@ -95,7 +101,7 @@ class SplashScreen(QSplashScreen):
         painter.drawPolygon(QPolygonF(shield_points))
         
         # Draw magnifying glass inside shield
-        painter.setPen(QPen(QColor("#00d4ff"), 2))
+        painter.setPen(QPen(QColor(_palette().accent), 2))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         
         # Circle part of magnifying glass
@@ -115,7 +121,7 @@ class SplashScreen(QSplashScreen):
         self.showMessage(
             f"  {message}",
             Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignLeft,
-            QColor("#00d4ff")
+            QColor(_palette().accent)
         )
         QApplication.processEvents()
     

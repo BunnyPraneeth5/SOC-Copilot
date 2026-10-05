@@ -25,6 +25,11 @@ from .config_panel import ConfigPanel
 from .about_dialog import AboutDialog
 from .system_status_bar import SystemStatusBar, PermissionBanner, KillSwitchBanner
 from .all_logs_view import AllLogsView
+from .theme import ThemeManager
+
+
+def _palette():
+    return ThemeManager.instance().palette
 
 
 class NavButton(QPushButton):
@@ -34,50 +39,51 @@ class NavButton(QPushButton):
         super().__init__(f"{icon}  {text}")
         self.index = index
         self._badge_count = 0
-        self._badge_color = "#ff4444"
+        self._badge_color = _palette().sev_critical
         self.setCheckable(True)
         self.setFixedHeight(45)
         self._update_style(False)
     
     def _update_style(self, active: bool):
+        p = _palette()
         if active:
-            self.setStyleSheet("""
-                QPushButton {
-                    background-color: #00d4ff;
-                    color: #0a0a1a;
+            self.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {p.accent};
+                    color: {p.text_inverse};
                     border: none;
                     border-radius: 8px;
                     padding: 10px 15px;
                     font-size: 13px;
                     font-weight: bold;
                     text-align: left;
-                }
+                }}
             """)
         else:
-            self.setStyleSheet("""
-                QPushButton {
+            self.setStyleSheet(f"""
+                QPushButton {{
                     background-color: transparent;
-                    color: #888888;
+                    color: {p.text_muted};
                     border: none;
                     border-radius: 8px;
                     padding: 10px 15px;
                     font-size: 13px;
                     text-align: left;
-                }
-                QPushButton:hover {
-                    background-color: #1a2744;
-                    color: #ffffff;
-                }
+                }}
+                QPushButton:hover {{
+                    background-color: {p.surface_alt};
+                    color: {p.text};
+                }}
             """)
     
     def setActive(self, active: bool):
         self.setChecked(active)
         self._update_style(active)
     
-    def set_badge(self, count: int, color: str = "#ff4444"):
+    def set_badge(self, count: int, color: str | None = None):
         """Set badge count on button"""
         self._badge_count = count
-        self._badge_color = color
+        self._badge_color = color or _palette().sev_critical
         self._update_text()
     
     def _update_text(self):
@@ -108,11 +114,11 @@ class Sidebar(QFrame):
     
     def _init_ui(self):
         self.setFixedWidth(200)
-        self.setStyleSheet("""
-            QFrame {
-                background-color: #0f1629;
-                border-right: 1px solid #1a2744;
-            }
+        self.setStyleSheet(f"""
+            QFrame {{
+                background-color: {_palette().input_bg};
+                border-right: 1px solid {_palette().surface_alt};
+            }}
         """)
         
         layout = QVBoxLayout()
@@ -122,15 +128,15 @@ class Sidebar(QFrame):
         # Logo/Title
         title = QLabel("🛡️ SOC Copilot")
         title.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
-        title.setStyleSheet("color: #00d4ff; padding: 10px 0;")
+        title.setStyleSheet(f"color: {_palette().accent}; padding: 10px 0;")
         layout.addWidget(title)
         
         # Beta badge
         beta_badge = QLabel("BETA")
         beta_badge.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
-        beta_badge.setStyleSheet("""
-            color: #1e1e1e;
-            background-color: #ffa000;
+        beta_badge.setStyleSheet(f"""
+            color: {_palette().text_inverse};
+            background-color: {_palette().sev_medium};
             border-radius: 4px;
             padding: 2px 8px;
         """)
@@ -140,12 +146,12 @@ class Sidebar(QFrame):
         
         # Simple status frame (replacing the counter cards)
         status_frame = QFrame()
-        status_frame.setStyleSheet("""
-            QFrame {
-                background-color: #16213e;
-                border: 1px solid #1a2744;
+        status_frame.setStyleSheet(f"""
+            QFrame {{
+                background-color: {_palette().surface};
+                border: 1px solid {_palette().surface_alt};
                 border-radius: 8px;
-            }
+            }}
         """)
         status_layout = QVBoxLayout()
         status_layout.setContentsMargins(12, 10, 12, 10)
@@ -153,12 +159,12 @@ class Sidebar(QFrame):
         
         self.status_indicator = QLabel("● Initializing...")
         self.status_indicator.setFont(QFont("Segoe UI", 11))
-        self.status_indicator.setStyleSheet("color: #ffa000;")
+        self.status_indicator.setStyleSheet(f"color: {_palette().sev_medium};")
         status_layout.addWidget(self.status_indicator)
-        
+
         self.status_detail = QLabel("Loading ML models")
         self.status_detail.setFont(QFont("Segoe UI", 9))
-        self.status_detail.setStyleSheet("color: #888888;")
+        self.status_detail.setStyleSheet(f"color: {_palette().text_muted};")
         status_layout.addWidget(self.status_detail)
         
         status_frame.setLayout(status_layout)
@@ -167,7 +173,9 @@ class Sidebar(QFrame):
         # Navigation buttons
         layout.addSpacing(15)
         nav_label = QLabel("NAVIGATION")
-        nav_label.setStyleSheet("color: #555; font-size: 10px; font-weight: bold;")
+        nav_label.setStyleSheet(
+            f"color: {_palette().text_muted}; font-size: 10px; font-weight: bold;"
+        )
         layout.addWidget(nav_label)
         
         self.nav_buttons = []
@@ -193,7 +201,9 @@ class Sidebar(QFrame):
         
         # Version info
         version_label = QLabel("v1.0.0-beta.1")
-        version_label.setStyleSheet("color: #444444; font-size: 10px;")
+        version_label.setStyleSheet(
+            f"color: {_palette().border}; font-size: 10px;"
+        )
         layout.addWidget(version_label)
         
         self.setLayout(layout)
@@ -217,18 +227,18 @@ class Sidebar(QFrame):
             # Update status indicator
             if stats.get("shutdown_flag"):
                 self.status_indicator.setText("🛑 Kill Switch Active")
-                self.status_indicator.setStyleSheet("color: #ff4444;")
+                self.status_indicator.setStyleSheet(f"color: {_palette().sev_critical};")
                 self.status_detail.setText("ML processing halted")
             elif stats.get("pipeline_loaded"):
                 self.status_indicator.setText("● Online")
-                self.status_indicator.setStyleSheet("color: #4CAF50;")
+                self.status_indicator.setStyleSheet(f"color: {_palette().success};")
                 
                 sources = stats.get("sources_count", 0)
                 results = stats.get("results_stored", 0)
                 self.status_detail.setText(f"{sources} sources • {results} results")
             else:
                 self.status_indicator.setText("● Initializing...")
-                self.status_indicator.setStyleSheet("color: #ffa000;")
+                self.status_indicator.setStyleSheet(f"color: {_palette().sev_medium};")
                 self.status_detail.setText("Loading ML models")
             
             # Update nav badges
@@ -241,21 +251,21 @@ class Sidebar(QFrame):
             
             # Alerts button badge
             if critical_count > 0:
-                self.nav_buttons[1].set_badge(total_alerts, "#ff4444")
+                self.nav_buttons[1].set_badge(total_alerts, _palette().sev_critical)
             elif total_alerts > 0:
-                self.nav_buttons[1].set_badge(total_alerts, "#ffa000")
+                self.nav_buttons[1].set_badge(total_alerts, _palette().sev_medium)
             else:
                 self.nav_buttons[1].set_badge(0)
-            
+
             # Dashboard badge (only for critical)
             if critical_count > 0:
-                self.nav_buttons[0].set_badge(critical_count, "#ff4444")
+                self.nav_buttons[0].set_badge(critical_count, _palette().sev_critical)
             else:
                 self.nav_buttons[0].set_badge(0)
                 
         except Exception:
             self.status_indicator.setText("● Error")
-            self.status_indicator.setStyleSheet("color: #ff4444;")
+            self.status_indicator.setStyleSheet(f"color: {_palette().sev_critical};")
             self.status_detail.setText("Connection failed")
 
 
@@ -275,72 +285,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("SOC Copilot [BETA] - Real-Time Security Analysis")
         self.setGeometry(50, 50, 1500, 950)
         
-        # Apply modern dark theme
-        self.setStyleSheet("""
-            QMainWindow {
-                background-color: #0a0a1a;
-                color: #ffffff;
-            }
-            QWidget {
-                background-color: #0a0a1a;
-                color: #ffffff;
-                font-family: 'Segoe UI', Arial, sans-serif;
-            }
-            QTabWidget::pane {
-                border: none;
-                background-color: #0f1629;
-                border-radius: 8px;
-            }
-            QTabBar::tab {
-                background-color: #0a0a1a;
-                color: #888888;
-                padding: 10px 20px;
-                margin-right: 2px;
-                border-top-left-radius: 6px;
-                border-top-right-radius: 6px;
-            }
-            QTabBar::tab:selected {
-                background-color: #0f1629;
-                color: #00d4ff;
-                font-weight: bold;
-            }
-            QTableWidget {
-                background-color: #0f1629;
-                alternate-background-color: #12192e;
-                gridline-color: #1a2744;
-                border: none;
-                border-radius: 8px;
-                selection-background-color: #00d4ff;
-                selection-color: #0a0a1a;
-            }
-            QHeaderView::section {
-                background-color: #0a1225;
-                color: #ffffff;
-                padding: 10px;
-                border: none;
-                font-weight: bold;
-            }
-            QScrollBar:vertical {
-                background-color: #0a0a1a;
-                width: 8px;
-                border-radius: 4px;
-            }
-            QScrollBar::handle:vertical {
-                background-color: #2a3f5f;
-                border-radius: 4px;
-                min-height: 30px;
-            }
-            QScrollBar::handle:vertical:hover {
-                background-color: #3a5f8f;
-            }
-            QStatusBar {
-                background-color: #0a1225;
-                color: #888888;
-                padding: 5px 15px;
-            }
-        """)
-        
         # Central widget
+        # (base styling comes from the global stylesheet — see theme.py)
         central = QWidget()
         self.setCentralWidget(central)
         
@@ -569,23 +515,24 @@ class MainWindow(QMainWindow):
     def _init_menu(self):
         """Initialize menu bar"""
         menubar = self.menuBar()
-        menubar.setStyleSheet("""
-            QMenuBar {
-                background-color: #0a1225;
-                color: #ffffff;
+        p = _palette()
+        menubar.setStyleSheet(f"""
+            QMenuBar {{
+                background-color: {p.input_bg};
+                color: {p.text};
                 padding: 2px;
-            }
-            QMenuBar::item { padding: 5px 10px; }
-            QMenuBar::item:selected { background-color: #1a2744; }
-            QMenu {
-                background-color: #0f1629;
-                color: #ffffff;
-                border: 1px solid #1a2744;
-            }
-            QMenu::item:selected {
-                background-color: #00d4ff;
-                color: #0a0a1a;
-            }
+            }}
+            QMenuBar::item {{ padding: 5px 10px; }}
+            QMenuBar::item:selected {{ background-color: {p.surface_alt}; }}
+            QMenu {{
+                background-color: {p.input_bg};
+                color: {p.text};
+                border: 1px solid {p.surface_alt};
+            }}
+            QMenu::item:selected {{
+                background-color: {p.accent};
+                color: {p.text_inverse};
+            }}
         """)
         
         # File menu
@@ -639,8 +586,8 @@ class MainWindow(QMainWindow):
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
-        painter.setPen(QPen(QColor("#00d4ff"), 2))
-        painter.setBrush(QColor("#0f1629"))
+        painter.setPen(QPen(QColor(_palette().accent), 2))
+        painter.setBrush(QColor(_palette().input_bg))
         
         x, y = 4, 4
         s = size - 8
@@ -655,7 +602,7 @@ class MainWindow(QMainWindow):
         ]
         painter.drawPolygon(QPolygonF(shield_points))
         
-        painter.setPen(QPen(QColor("#00d4ff"), 2))
+        painter.setPen(QPen(QColor(_palette().accent), 2))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawEllipse(int(x + s*0.3), int(y + s*0.25), int(s*0.4), int(s*0.4))
         painter.drawLine(
