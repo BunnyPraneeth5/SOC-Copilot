@@ -4,7 +4,7 @@ import time
 import uuid
 from collections import deque
 from datetime import datetime
-from typing import Optional, Callable, List
+from typing import Dict, Optional, Callable, List
 from pathlib import Path
 
 from soc_copilot.pipeline import AnalysisStats, create_soc_copilot
@@ -698,7 +698,50 @@ class AppController:
             except Exception as exc:  # noqa: BLE001 - audit must not break feedback
                 logger.warning("feedback_audit_failed", error=str(exc))
 
+        # UX-5: feedback drives triage status — reject ⇒ False positive,
+        # accept ⇒ In progress (only when still New), reclassify ⇒ no change.
+        if action == "reject":
+            self.set_alert_status(alert_id, "False positive")
+        elif action == "accept" and self.get_alert_status(alert_id) == "New":
+            self.set_alert_status(alert_id, "In progress")
+
         return record_id
+
+    # ------------------------------------------------------------------
+    # Alert triage status (UX-5)
+    # ------------------------------------------------------------------
+
+    def set_alert_status(
+        self,
+        alert_id: str,
+        status: str,
+        actor: str = "analyst-ui",
+        note: Optional[str] = None,
+    ) -> None:
+        """Set triage status; audits and notifies result listeners."""
+        self.result_store.set_triage(alert_id, status, actor=actor, note=note)
+
+        if self.audit_logger is not None:
+            try:
+                self.audit_logger.log_event(
+                    actor=actor,
+                    action=f"triage_{status.lower().replace(' ', '_')}",
+                    reason=f"alert_id={alert_id} note={note}",
+                )
+            except Exception as exc:  # noqa: BLE001 - audit must not break
+                logger.warning("triage_audit_failed", error=str(exc))
+
+        # listeners (bridge) refresh views; results payload is unchanged
+        self._notify_result_listeners(None)
+
+    def get_alert_status(self, alert_id: str) -> str:
+        """Return triage status for an alert ('New' default)."""
+        entry = self.result_store.get_triage(alert_id)
+        return entry["status"] if entry else "New"
+
+    def get_triage_map(self) -> Dict[str, str]:
+        """Return alert_id -> triage status."""
+        return self.result_store.get_triage_map()
 
     def get_feedback_for_alert(self, alert_id: str) -> List[dict]:
         """Return all feedback records for an alert ([] if no store)."""

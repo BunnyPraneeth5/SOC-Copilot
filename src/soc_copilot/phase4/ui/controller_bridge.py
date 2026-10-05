@@ -260,6 +260,29 @@ class ControllerBridge(QObject):
             return []
         return handler(alert_id)
 
+    def set_alert_status(
+        self,
+        alert_id: str,
+        status: str,
+        actor: str = "analyst-ui",
+        note: Optional[str] = None,
+    ) -> None:
+        """Set triage status on an alert via the controller."""
+        handler = getattr(self._controller, "set_alert_status", None)
+        if handler is None:
+            raise RuntimeError("Triage not available")
+        handler(alert_id, status, actor=actor, note=note)
+
+    def get_alert_status(self, alert_id: str) -> str:
+        """Triage status for an alert ('New' default)."""
+        handler = getattr(self._controller, "get_alert_status", None)
+        return handler(alert_id) if handler else "New"
+
+    def get_triage_map(self) -> Dict[str, str]:
+        """alert_id -> status for all triaged alerts."""
+        handler = getattr(self._controller, "get_triage_map", None)
+        return handler() if handler else {}
+
     def get_drift_status(self) -> Dict[str, Any]:
         """Get drift monitoring status (read-only)."""
         handler = getattr(self._controller, "get_drift_status", None)

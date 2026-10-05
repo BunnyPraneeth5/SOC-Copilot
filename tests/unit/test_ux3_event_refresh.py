@@ -102,7 +102,12 @@ class TestBridgeDebounce:
         t = threading.Thread(target=worker)
         t.start()
         t.join()
-        QTest.qWait(600)  # > 250 ms debounce window
+        # poll until delivered (queued slot + 250 ms throttle under load)
+        for _ in range(50):
+            if received:
+                break
+            QTest.qWait(50)
+        QTest.qWait(300)  # let any extra fires land
         assert received == [1]
         bridge.deleteLater()
 

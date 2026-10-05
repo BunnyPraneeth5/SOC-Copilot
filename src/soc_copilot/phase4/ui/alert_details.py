@@ -8,6 +8,15 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QColor
 
 from .theme import ThemeManager, severity_color, set_role
+from ..controller.result_store import TRIAGE_STATUSES
+
+# Triage status → palette token (UX-5)
+STATUS_TOKENS = {
+    "New": "info",
+    "In progress": "warning",
+    "Resolved": "success",
+    "False positive": "text_muted",
+}
 
 
 def _palette():
@@ -162,18 +171,19 @@ class AlertDetailsPanel(QWidget):
         self._last_show_args = (batch_id, alert_classification, alert_id)
         try:
             result = self.bridge.get_alert_by_id(batch_id)
-            if not result:
+            alerts = getattr(result, "alerts", None)
+            if not isinstance(alerts, (list, tuple)) or not alerts:
                 return
 
             # Find matching alert
             alert = None
             if alert_id:
-                for a in result.alerts:
+                for a in alerts:
                     if getattr(a, "alert_id", None) == alert_id:
                         alert = a
                         break
             if alert is None and alert_classification:
-                for a in result.alerts:
+                for a in alerts:
                     if a.classification == alert_classification:
                         alert = a
                         break
@@ -196,6 +206,23 @@ class AlertDetailsPanel(QWidget):
                 padding: 6px 12px;
             """)
             priority_section.addWidget(priority_badge)
+
+            # Triage status badge + selector (UX-5)
+            self._current_alert_id = alert.alert_id
+            self._status_badge = QLabel()
+            self._update_status_badge()
+            priority_section.addWidget(self._status_badge)
+            self._status_combo = QComboBox()
+            self._status_combo.addItems(TRIAGE_STATUSES)
+            current = self._get_alert_status(alert.alert_id)
+            self._status_combo.blockSignals(True)
+            self._status_combo.setCurrentText(current)
+            self._status_combo.blockSignals(False)
+            self._status_combo.currentTextChanged.connect(
+                self._on_status_combo_changed
+            )
+            priority_section.addWidget(self._status_combo)
+
             priority_section.addStretch()
             self.details_layout.addLayout(priority_section)
             
@@ -341,12 +368,60 @@ class AlertDetailsPanel(QWidget):
         "Suspicious", "PrivilegeEscalation",
     ]
 
+    # ------------------------------------------------------------------
+    # Triage status (UX-5)
+    # ------------------------------------------------------------------
+
+    def _get_alert_status(self, alert_id: str) -> str:
+        getter = getattr(self.bridge, "get_alert_status", None)
+        try:
+            status = getter(alert_id) if callable(getter) else "New"
+            return status if isinstance(status, str) else "New"
+        except Exception:
+            return "New"
+
+    def _update_status_badge(self):
+        p = _palette()
+        status = self._get_alert_status(
+            getattr(self, "_current_alert_id", "") or ""
+        )
+        color = getattr(p, STATUS_TOKENS.get(status, "info"))
+        self._status_badge.setText(f"  {status}  ")
+        self._status_badge.setStyleSheet(f"""
+            background-color: {color};
+            color: {p.text_inverse};
+            font-weight: bold;
+            font-size: 11px;
+            border-radius: 4px;
+            padding: 4px 10px;
+        """)
+        self._status_badge.setToolTip("Triage status")
+
+    def _on_status_combo_changed(self, status: str):
+        alert_id = getattr(self, "_current_alert_id", None)
+        if not alert_id:
+            return
+        try:
+            self.bridge.set_alert_status(alert_id, status)
+            self._update_status_badge()
+        except Exception as exc:
+            # Revert combo to the persisted status on failure
+            self._status_combo.blockSignals(True)
+            self._status_combo.setCurrentText(self._get_alert_status(alert_id))
+            self._status_combo.blockSignals(False)
+            self._status_badge.setToolTip(f"Change failed: {exc}")
+
     def _feedback_enabled(self) -> bool:
         """Whether the controller reports a feedback store."""
         try:
-            stats = self.bridge.get_stats() or {}
-            phase2 = stats.get("phase2") or {}
-            return bool(phase2.get("feedback_enabled", False))
+            stats = self.bridge.get_stats()
+            if not isinstance(stats, dict):
+                return False
+            phase2 = stats.get("phase2")
+            return (
+                isinstance(phase2, dict)
+                and bool(phase2.get("feedback_enabled", False))
+            )
         except Exception:
             return False
 
@@ -437,8 +512,10 @@ class AlertDetailsPanel(QWidget):
     def _update_feedback_history(self, alert_id: str):
         """Refresh the 'previous feedback' line for an alert."""
         try:
-            entries = self.bridge.get_feedback_for_alert(alert_id) or []
+            entries = self.bridge.get_feedback_for_alert(alert_id)
         except Exception:
+            entries = []
+        if not isinstance(entries, list):
             entries = []
         if entries:
             latest = entries[0]
@@ -459,6 +536,15 @@ class AlertDetailsPanel(QWidget):
             )
             self._feedback_status_label.setText(f"Feedback recorded: {action}")
             self._update_feedback_history(alert_id)
+            # Feedback drives triage status (reject ⇒ False positive, etc.)
+            if getattr(self, "_status_badge", None) is not None:
+                self._update_status_badge()
+                if getattr(self, "_status_combo", None) is not None:
+                    self._status_combo.blockSignals(True)
+                    self._status_combo.setCurrentText(
+                        self._get_alert_status(alert_id)
+                    )
+                    self._status_combo.blockSignals(False)
         except Exception as e:
             self._feedback_status_label.setStyleSheet(
                 f"color: {_palette().sev_critical}; font-size: 12px;"
