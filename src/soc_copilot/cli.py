@@ -224,13 +224,19 @@ Examples:
     governance_revoke.add_argument("--reviewer", required=True, help="Reviewer name")
     governance_revoke.add_argument("--notes", help="Revocation notes")
     
-    # Governance disable
-    governance_disable = governance_subparsers.add_parser("disable", help="Enable kill switch (disable Phase-3)")
+    # Governance lock (enable it to disable Phase-3 governance features)
+    governance_disable = governance_subparsers.add_parser(
+        "disable",
+        help="Enable governance lock — disables Phase-3 features (NOT the emergency analysis stop)",
+    )
     governance_disable.add_argument("--actor", required=True, help="Actor name")
     governance_disable.add_argument("--reason", required=True, help="Reason")
     
     # Governance enable
-    governance_enable = governance_subparsers.add_parser("enable", help="Disable kill switch (enable Phase-3)")
+    governance_enable = governance_subparsers.add_parser(
+        "enable",
+        help="Disable governance lock — re-enables Phase-3 features",
+    )
     governance_enable.add_argument("--actor", required=True, help="Actor name")
     governance_enable.add_argument("--reason", required=True, help="Reason")
     
@@ -251,7 +257,20 @@ Examples:
     # System logs disable
     system_logs_disable = system_logs_subparsers.add_parser("disable", help="Disable system log ingestion")
     system_logs_disable.add_argument("--actor", required=True, help="Actor name")
-    
+
+    # Emergency kill switch (phase4 .kill file — stops analysis)
+    killswitch_parser = subparsers.add_parser(
+        "killswitch",
+        help="Emergency analysis stop control (.kill file)",
+    )
+    killswitch_parser.add_argument(
+        "action",
+        choices=["on", "off", "status"],
+        help="Activate, deactivate, or show the emergency stop state",
+    )
+    killswitch_parser.add_argument("--actor", default="cli", help="Actor name")
+    killswitch_parser.add_argument("--reason", default="", help="Reason for the change")
+
     return parser
 
 
@@ -731,9 +750,10 @@ def cmd_governance(args) -> int:
         print("\nGovernance Status")
         print("=" * 60)
         
-        # Kill switch
+        # Governance lock (Phase-3 feature switch; distinct from the
+        # phase4 emergency analysis stop controlled by `killswitch`)
         ks_state = killswitch.get_state()
-        print(f"\nKill Switch: {'ENABLED' if ks_state['enabled'] else 'DISABLED'}")
+        print(f"\nGovernance lock (Phase-3 features): {'ENABLED' if ks_state['enabled'] else 'DISABLED'}")
         print(f"  Phase-3 Status: {ks_state['phase3_status'].upper()}")
         if ks_state['last_changed']:
             print(f"  Last Changed: {ks_state['last_changed']}")
@@ -861,15 +881,15 @@ def cmd_governance(args) -> int:
         audit = AuditLogger(db_path)
         
         killswitch.enable(actor=args.actor, reason=args.reason)
-        
+
         # Audit event
         audit.log_event(
             actor=args.actor,
             action="killswitch_enabled",
             reason=args.reason
         )
-        
-        print(f"\nKill switch ENABLED")
+
+        print(f"\nGovernance lock (Phase-3 features) ENABLED")
         print(f"  Phase-3 Status: DISABLED")
         print(f"  Actor: {args.actor}")
         print(f"  Reason: {args.reason}")
@@ -881,15 +901,15 @@ def cmd_governance(args) -> int:
         audit = AuditLogger(db_path)
         
         killswitch.disable(actor=args.actor, reason=args.reason)
-        
+
         # Audit event
         audit.log_event(
             actor=args.actor,
             action="killswitch_disabled",
             reason=args.reason
         )
-        
-        print(f"\nKill switch DISABLED")
+
+        print(f"\nGovernance lock (Phase-3 features) DISABLED")
         print(f"  Phase-3 Status: ENABLED")
         print(f"  Actor: {args.actor}")
         print(f"  Reason: {args.reason}")
@@ -991,8 +1011,48 @@ def cmd_system_logs(args) -> int:
         return 1
 
 
+def cmd_killswitch(args) -> int:
+    """Run killswitch command — phase4 emergency analysis stop (.kill file)."""
+    from soc_copilot.phase4.kill_switch import KillSwitch as EmergencyKillSwitch
+
+    kill_switch = EmergencyKillSwitch()
+
+    if args.action == "status":
+        state = "ACTIVE" if kill_switch.is_active() else "inactive"
+        print(f"Emergency analysis stop: {state}")
+        return 0
+
+    db_path = "data/governance/governance.db"
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    audit = AuditLogger(db_path)
+
+    if args.action == "on":
+        kill_switch.activate()
+        audit.log_event(
+            actor=args.actor,
+            action="emergency_killswitch_activated",
+            reason=args.reason or "Manual activation via CLI",
+        )
+    else:
+        kill_switch.deactivate()
+        audit.log_event(
+            actor=args.actor,
+            action="emergency_killswitch_deactivated",
+            reason=args.reason or "Manual deactivation via CLI",
+        )
+
+    state = "ACTIVE" if kill_switch.is_active() else "inactive"
+    print(f"Emergency analysis stop: {state}")
+    return 0
+
+
 def main() -> int:
     """Main entry point."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(errors="replace")
+
     parser = setup_parser()
     args = parser.parse_args()
     
@@ -1014,6 +1074,8 @@ def main() -> int:
         return cmd_governance(args)
     elif args.command == "system-logs":
         return cmd_system_logs(args)
+    elif args.command == "killswitch":
+        return cmd_killswitch(args)
     
     return 0
 

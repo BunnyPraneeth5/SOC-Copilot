@@ -2,6 +2,7 @@
 
 import time
 import uuid
+from collections import deque
 from datetime import datetime
 from typing import Optional, Callable, List
 from pathlib import Path
@@ -23,6 +24,30 @@ logger = get_logger(__name__)
 PRIORITY_CRITICAL = "P0-Critical"
 PRIORITY_HIGH = "P1-High"
 PRIORITY_MEDIUM = "P2-Medium"
+
+# Cross-line brute-force aggregation parameters
+BRUTE_FORCE_WINDOW_SECONDS = 300
+BRUTE_FORCE_THRESHOLD = 5
+
+# Minimum overlap with the CICIDS feature order for a record to be routed
+# to the network-flow ML models.
+FLOW_FEATURE_OVERLAP_MIN = 10
+
+_SYSLOG_MONTHS = {
+    "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
+    "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12,
+}
+
+
+def _normalize_flow_key(name: str) -> str:
+    """Normalize a field name for flow-feature overlap comparison.
+
+    Mirrors ``FieldStandardizer`` key normalization (kept local because
+    phase4 must not import from ``soc_copilot.data``).
+    """
+    import re
+    result = re.sub(r"[\.\[\]\s\-\/\\]+", "_", name)
+    return result.strip("_").lower()
 
 
 class AppController:
@@ -48,6 +73,16 @@ class AppController:
         self._sources_count = 0
         self._dropped_count = 0
         self._batches_processed = 0
+        # Flow routing: normalised CICIDS feature names loaded in
+        # initialize(); None means "feature order unavailable, route
+        # everything" (pre-routing behaviour).
+        self._flow_feature_names: Optional[set] = None
+        self._flow_records_routed = 0
+        self._non_flow_records = 0
+        # Cross-line brute-force aggregation (see _aggregate_failed_logins)
+        self._clock = time.monotonic
+        self._failed_logins: dict = {}
+        self._bf_alerted_until: dict = {}
     
     def initialize(self):
         """Initialize analysis pipelines (network-flow ML + text log ML)"""
@@ -78,6 +113,25 @@ class AppController:
                 "path": str(text_log_model_path),
                 "error": str(e),
             }
+
+        # Load the flow feature order used to route records to the IF/RF
+        # models. Missing/unreadable → None → every record is routed (old
+        # behaviour).
+        feature_order_path = Path(self.models_dir) / "feature_order.json"
+        try:
+            import json as _json
+            with open(feature_order_path, encoding="utf-8") as f:
+                names = _json.load(f)["feature_names"]
+            self._flow_feature_names = {
+                _normalize_flow_key(name) for name in names
+            }
+        except Exception as e:  # noqa: BLE001 - fall back to routing all
+            logger.warning(
+                "flow_feature_order_unavailable",
+                path=str(feature_order_path),
+                error=str(e),
+            )
+            self._flow_feature_names = None
     
     def process_batch(self, records: List[dict]) -> Optional[AnalysisResult]:
         """Process batch of raw log records"""
@@ -98,6 +152,10 @@ class AppController:
         
         # Run text log ML detection (falls back to rules if model unavailable)
         text_log_alerts = self._text_log_ml_detect(raw_lines)
+
+        # Cross-line brute-force aggregation (syslog/Windows one-line-per-
+        # attempt formats)
+        bf_agg_alerts = self._aggregate_failed_logins(raw_lines)
         
         # Analyze batch (using existing ML pipeline). If it fails, keep the
         # text-log/rule alerts instead of discarding the whole batch.
@@ -121,12 +179,14 @@ class AppController:
         # Convert ML alerts to view models
         alert_summaries = self._convert_alerts(alerts)
         
-        # Merge text log alerts with network-flow ML alerts
+        # Merge text log and aggregated brute-force alerts with
+        # network-flow ML alerts
         alert_summaries.extend(text_log_alerts)
+        alert_summaries.extend(bf_agg_alerts)
         
         pipeline_stats = self._convert_stats(stats, processing_time)
         pipeline_stats.alerts_generated = len(alert_summaries)
-        for ta in text_log_alerts:
+        for ta in (*text_log_alerts, *bf_agg_alerts):
             cls = ta.classification
             pipeline_stats.classification_distribution[cls] = (
                 pipeline_stats.classification_distribution.get(cls, 0) + 1
@@ -237,6 +297,14 @@ class AppController:
         
         for line in lines:
             parsed = self._parse_raw_log(line)
+
+            # A single failed login is not alert-worthy on its own; repeated
+            # failures are handled by _aggregate_failed_logins.
+            if (
+                parsed.get("login_failed")
+                and parsed.get("login_attempts", 0) < BRUTE_FORCE_THRESHOLD
+            ):
+                continue
             
             try:
                 classification, confidence, class_probas = (
@@ -453,9 +521,85 @@ class AppController:
                         ),
                         suggested_action="Verify authorization for this role change and audit account activity immediately",
                     ))
-        
+
         return alerts
-    
+
+    def _aggregate_failed_logins(self, lines: List[str]) -> List[AlertSummary]:
+        """Cross-line brute-force aggregation.
+
+        Real logs emit one line per failed login, so single-line rules
+        never fire. This tracks failed logins per source IP over a sliding
+        window and emits at most one alert per IP per window.
+        """
+        alerts: List[AlertSummary] = []
+        now = self._clock()
+        window = BRUTE_FORCE_WINDOW_SECONDS
+
+        for line in lines:
+            parsed = self._parse_raw_log(line)
+            if not parsed.get("login_failed"):
+                continue
+            src_ip = parsed.get("src_ip", "")
+            if not src_ip:
+                continue
+            # Single-line attempts >= threshold are already covered by the
+            # per-line brute-force rules; don't double alert.
+            if parsed.get("login_attempts", 0) >= BRUTE_FORCE_THRESHOLD:
+                continue
+
+            entries = self._failed_logins.setdefault(src_ip, deque())
+            entries.append((now, parsed.get("user", "") or "unknown"))
+            while entries and now - entries[0][0] > window:
+                entries.popleft()
+
+            if (
+                len(entries) >= BRUTE_FORCE_THRESHOLD
+                and now >= self._bf_alerted_until.get(src_ip, 0.0)
+            ):
+                count = len(entries)
+                users = list(dict.fromkeys(u for _, u in entries))[:5]
+                is_external = self._is_external_ip(src_ip)
+                if is_external and count >= 10:
+                    priority, risk = PRIORITY_CRITICAL, 0.95
+                elif is_external:
+                    priority, risk = PRIORITY_CRITICAL, 0.90
+                else:
+                    priority, risk = PRIORITY_HIGH, 0.75
+                self._bf_alerted_until[src_ip] = now + window
+                alerts.append(AlertSummary(
+                    alert_id=f"RULE-BFAGG-{uuid.uuid4().hex[:8]}",
+                    priority=priority,
+                    classification="BruteForce",
+                    confidence=risk,
+                    anomaly_score=risk,
+                    risk_score=risk,
+                    source_ip=src_ip,
+                    destination_ip=None,
+                    timestamp=datetime.now(),
+                    reasoning=(
+                        f"Brute force attack: {count} failed logins from "
+                        f"{src_ip} within {window}s "
+                        f"(usernames: {', '.join(users)})"
+                    ),
+                    suggested_action="Block source IP immediately and investigate compromised credentials",
+                ))
+
+        return alerts
+
+    def _is_flow_record(self, entry: dict) -> bool:
+        """Whether a log entry looks like a CICIDS-style flow record.
+
+        Counts overlap between the entry's normalized keys and the loaded
+        flow feature names. If no feature order was loaded, every entry is
+        treated as flow (pre-routing behaviour).
+        """
+        if self._flow_feature_names is None:
+            return True
+        overlap = sum(
+            1 for key in entry if _normalize_flow_key(key) in self._flow_feature_names
+        )
+        return overlap >= FLOW_FEATURE_OVERLAP_MIN
+
     def _parse_raw_log(self, line: str) -> dict:
         """Extract security-relevant fields from raw log lines.
         
@@ -479,13 +623,28 @@ class AppController:
             "raw_log": line,
             "login_attempts": 0,
             "data_size_mb": 0,
-            "new_role": ""
+            "new_role": "",
+            "login_failed": False,
         }
-        
-        # Extract timestamp (YYYY-MM-DD HH:MM:SS)
+
+        # Extract timestamp (YYYY-MM-DD HH:MM:SS — also matches the Windows
+        # exporter prefix "yyyy-MM-dd HH:mm:ss|EventID=...")
         ts_match = re.match(r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})', line)
         if ts_match:
             entry["timestamp"] = ts_match.group(1).replace(' ', 'T') + 'Z'
+        else:
+            # Syslog timestamp: "Jan 18 02:56:01" (current year assumed)
+            syslog_ts = re.match(
+                r'^([A-Z][a-z]{2})\s+(\d{1,2})\s+(\d{2}:\d{2}:\d{2})', line
+            )
+            if syslog_ts:
+                month = _SYSLOG_MONTHS.get(syslog_ts.group(1))
+                if month:
+                    now = datetime.now()
+                    entry["timestamp"] = (
+                        f"{now.year:04d}-{month:02d}-"
+                        f"{int(syslog_ts.group(2)):02d}T{syslog_ts.group(3)}Z"
+                    )
         
         # Extract event type
         event_match = re.search(r'\b(UserLogin|LoginAttempt|LoginFailure|BruteForceDetected|FileExecution|MalwareDetected|DataTransfer|DataExfiltration|PrivilegeEscalation)\b', line)
@@ -499,6 +658,109 @@ class AppController:
             }
             entry["event_type"] = _EVENT_NORMALIZE.get(raw_event, raw_event)
         
+        # sshd failed logins (password and publickey variants)
+        sshd_failed = re.search(
+            r'Failed\s+(?:password|publickey)\s+for\s+'
+            r'(?:invalid user\s+)?(\S+)\s+from\s+(\S+)',
+            line,
+            re.IGNORECASE,
+        )
+        if sshd_failed:
+            entry["event_type"] = "LoginAttempt"
+            entry["user"] = sshd_failed.group(1)
+            entry["src_ip"] = sshd_failed.group(2)
+            entry["login_failed"] = True
+            entry["login_attempts"] = 1
+        else:
+            # "Invalid user bob from 1.2.3.4" (sshd pre-auth failure)
+            invalid_user = re.search(
+                r'Invalid user\s+(\S+)\s+from\s+(\S+)', line, re.IGNORECASE
+            )
+            if invalid_user:
+                entry["event_type"] = "LoginAttempt"
+                entry["user"] = invalid_user.group(1)
+                entry["src_ip"] = invalid_user.group(2)
+                entry["login_failed"] = True
+                entry["login_attempts"] = 1
+            else:
+                # PAM authentication failures carry the host in rhost=
+                pam_failed = re.search(
+                    r'authentication failure;.*?rhost=(\S+)',
+                    line,
+                    re.IGNORECASE,
+                )
+                if pam_failed:
+                    entry["event_type"] = "LoginAttempt"
+                    entry["src_ip"] = pam_failed.group(1)
+                    entry["login_failed"] = True
+                    entry["login_attempts"] = 1
+                    pam_user = re.search(r'\buser=(\S+)', line)
+                    if pam_user:
+                        entry["user"] = pam_user.group(1)
+                else:
+                    # sshd successful login
+                    sshd_ok = re.search(
+                        r'Accepted\s+(?:password|publickey)\s+for\s+(\S+)'
+                        r'\s+from\s+(\S+)',
+                        line,
+                        re.IGNORECASE,
+                    )
+                    if sshd_ok:
+                        entry["event_type"] = "UserLogin"
+                        entry["user"] = sshd_ok.group(1)
+                        entry["src_ip"] = sshd_ok.group(2)
+                        entry["login_failed"] = False
+
+        # Windows Security exporter lines:
+        #   yyyy-MM-dd HH:mm:ss|EventID=N|Level=..|Message=... (newlines
+        #   flattened to spaces by export_windows_security.ps1)
+        win_event = re.search(r'\bEventID=(\d+)', line)
+        if win_event:
+            event_id = win_event.group(1)
+            account_names = re.findall(
+                r'Account Name:\s*(\S+)', line, re.IGNORECASE
+            )
+            src_match = re.search(
+                r'Source Network Address:\s*(\S+)', line, re.IGNORECASE
+            )
+            win_ip = ""
+            if src_match and src_match.group(1) != "-":
+                win_ip = src_match.group(1)
+            if event_id == "4625":
+                # Failed logon
+                entry["event_type"] = "LoginAttempt"
+                entry["login_failed"] = True
+                entry["login_attempts"] = 1
+                if account_names:
+                    entry["user"] = account_names[-1]
+                if win_ip:
+                    entry["src_ip"] = win_ip
+            elif event_id == "4624":
+                # Successful logon
+                entry["event_type"] = "UserLogin"
+                entry["login_failed"] = False
+                if account_names:
+                    entry["user"] = account_names[-1]
+                if win_ip:
+                    entry["src_ip"] = win_ip
+            elif event_id in ("4728", "4732", "4756"):
+                # Member added to a security-enabled group
+                entry["event_type"] = "PrivilegeEscalation"
+                if account_names:
+                    entry["user"] = account_names[-1]
+                group_match = re.search(
+                    r'Group Name:\s*([A-Za-z0-9_\-\. ]+?)(?:\s*\||\.|$)',
+                    line,
+                )
+                group_name = (
+                    group_match.group(1).strip() if group_match else ""
+                )
+                entry["new_role"] = (
+                    "admin"
+                    if "admin" in group_name.lower()
+                    else (group_name or "unknown")
+                )
+
         # Extract key=value pairs
         for match in re.finditer(r'(\w+)=([^\s]+)', line):
             key, value = match.groups()
@@ -520,6 +782,9 @@ class AppController:
                     entry["login_attempts"] = int(value)
                 except ValueError:
                     pass
+            elif key == 'success':
+                if value.lower() == 'false':
+                    entry["login_failed"] = True
             elif key == 'size':
                 try:
                     if 'GB' in value:
@@ -552,20 +817,42 @@ class AppController:
         import tempfile
         import json
         
+        # Route only CICIDS-style flow records to the IF/RF models; text
+        # and system log lines produce near-zero feature vectors and are
+        # handled by rule/text-log detection instead.
+        flow_entries = []
+        for index, line in enumerate(lines):
+            # Use JSON objects as-is, otherwise extract fields from the raw log
+            try:
+                log_entry = json.loads(line)
+            except (json.JSONDecodeError, TypeError):
+                log_entry = None
+            if not isinstance(log_entry, dict):
+                log_entry = self._parse_raw_log(line)
+            if not self._is_flow_record(log_entry):
+                continue
+            log_entry["_line_index"] = index
+            flow_entries.append(log_entry)
+
+        routed = len(flow_entries)
+        skipped = len(lines) - routed
+        self._flow_records_routed += routed
+        self._non_flow_records += skipped
+        logger.debug(
+            "flow_routing", routed=routed, skipped_non_flow=skipped
+        )
+
+        if not flow_entries:
+            stats = AnalysisStats()
+            stats.total_records = len(lines)
+            return [], [], stats
+
         # Create temp file in JSONL format for proper parsing
         with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False, encoding='utf-8') as f:
-            for index, line in enumerate(lines):
-                # Use JSON objects as-is, otherwise extract fields from the raw log
-                try:
-                    log_entry = json.loads(line)
-                except (json.JSONDecodeError, TypeError):
-                    log_entry = None
-                if not isinstance(log_entry, dict):
-                    log_entry = self._parse_raw_log(line)
-                log_entry["_line_index"] = index
+            for log_entry in flow_entries:
                 f.write(json.dumps(log_entry) + '\n')
             temp_path = f.name
-        
+
         try:
             results, alerts, stats = self._pipeline.analyze_file(Path(temp_path))
             return results, alerts, stats
@@ -633,6 +920,8 @@ class AppController:
             "sources_count": self._sources_count,
             "dropped_count": self._dropped_count,
             "batches_processed": self._batches_processed,
+            "flow_records_routed": self._flow_records_routed,
+            "non_flow_records": self._non_flow_records,
             "deduplication": deduplication,
             "security": {
                 "strict_model_integrity": strict_model_integrity_enabled(),
