@@ -9,15 +9,36 @@ This module provides a single source of truth for:
 from dataclasses import dataclass
 from typing import Dict
 
-from .theme import DARK
+from .theme import color
 
 
 @dataclass
 class StateConfig:
-    """Configuration for a UI state display."""
+    """Configuration for a UI state display.
+
+    ``color`` holds a palette *token name*; it is resolved to the
+    current palette's hex value when read through ``_StateMap``.
+    """
     label: str
     color: str
     icon: str = "●"
+
+
+class _StateMap(dict):
+    """State map whose entries resolve token names to live palette colors."""
+
+    def __getitem__(self, key):
+        cfg = super().__getitem__(key)
+        return StateConfig(label=cfg.label, color=color(cfg.color), icon=cfg.icon)
+
+    def get(self, key, default=None):
+        return self[key] if key in self else default
+
+    def items(self):
+        return ((k, self[k]) for k in self.keys())
+
+    def values(self):
+        return (self[k] for k in self.keys())
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -29,11 +50,11 @@ class PipelineState:
     INACTIVE = "inactive"
 
 
-PIPELINE_STATES: Dict[str, StateConfig] = {
-    PipelineState.ACTIVE: StateConfig(label="Active", color=DARK.success, icon="●"),
-    PipelineState.LOADING: StateConfig(label="Loading...", color=DARK.sev_medium, icon="○"),
-    PipelineState.INACTIVE: StateConfig(label="Inactive", color=DARK.sev_high, icon="○"),
-}
+PIPELINE_STATES: Dict[str, StateConfig] = _StateMap({
+    PipelineState.ACTIVE: StateConfig(label="Active", color="success", icon="●"),
+    PipelineState.LOADING: StateConfig(label="Loading...", color="sev_medium", icon="○"),
+    PipelineState.INACTIVE: StateConfig(label="Inactive", color="sev_high", icon="○"),
+})
 
 
 def get_pipeline_state(pipeline_loaded: bool) -> str:
@@ -52,13 +73,13 @@ class IngestionState:
     STOPPED = "stopped"
 
 
-INGESTION_STATES: Dict[str, StateConfig] = {
-    IngestionState.ACTIVE: StateConfig(label="Active", color=DARK.info, icon="●"),
-    IngestionState.IDLE: StateConfig(label="Idle", color=DARK.text_muted, icon="○"),
-    IngestionState.CONFIGURED: StateConfig(label="Configured", color=DARK.info, icon="○"),
-    IngestionState.NOT_STARTED: StateConfig(label="Not Started", color=DARK.text_muted, icon="○"),
-    IngestionState.STOPPED: StateConfig(label="Stopped", color=DARK.warning, icon="○"),
-}
+INGESTION_STATES: Dict[str, StateConfig] = _StateMap({
+    IngestionState.ACTIVE: StateConfig(label="Active", color="info", icon="●"),
+    IngestionState.IDLE: StateConfig(label="Idle", color="text_muted", icon="○"),
+    IngestionState.CONFIGURED: StateConfig(label="Configured", color="info", icon="○"),
+    IngestionState.NOT_STARTED: StateConfig(label="Not Started", color="text_muted", icon="○"),
+    IngestionState.STOPPED: StateConfig(label="Stopped", color="warning", icon="○"),
+})
 
 
 def get_ingestion_state(running: bool, sources_count: int, shutdown_flag: bool) -> str:
@@ -81,11 +102,11 @@ class GovernanceState:
     HALTED = "halted"
 
 
-GOVERNANCE_STATES: Dict[str, StateConfig] = {
-    GovernanceState.OK: StateConfig(label="OK", color=DARK.success, icon="✓"),
-    GovernanceState.LIMITED: StateConfig(label="Limited", color=DARK.warning, icon="⚠"),
-    GovernanceState.HALTED: StateConfig(label="Halted", color=DARK.sev_critical, icon="🛑"),
-}
+GOVERNANCE_STATES: Dict[str, StateConfig] = _StateMap({
+    GovernanceState.OK: StateConfig(label="OK", color="success", icon="✓"),
+    GovernanceState.LIMITED: StateConfig(label="Limited", color="warning", icon="⚠"),
+    GovernanceState.HALTED: StateConfig(label="Halted", color="sev_critical", icon="🛑"),
+})
 
 
 def get_governance_state(shutdown_flag: bool, has_permission: bool) -> str:

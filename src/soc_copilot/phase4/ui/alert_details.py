@@ -22,7 +22,7 @@ class DetailField(QFrame):
         p = _palette()
         color = color or p.text
         self.setStyleSheet(f"""
-            QFrame {{
+            DetailField {{
                 background-color: {p.surface};
                 border: 1px solid {p.surface_alt};
                 border-radius: 6px;
@@ -67,20 +67,8 @@ class AlertDetailsPanel(QWidget):
         header = QHBoxLayout()
         
         back_btn = QPushButton("← Back to Alerts")
-        back_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: transparent;
-                color: {_palette().accent};
-                border: 1px solid {_palette().accent};
-                border-radius: 4px;
-                padding: 8px 15px;
-                font-size: 12px;
-            }}
-            QPushButton:hover {{
-                background-color: {_palette().accent};
-                color: {_palette().text_inverse};
-            }}
-        """)
+        self._back_btn = back_btn
+        self._style_back_button()
         back_btn.clicked.connect(self.back_clicked.emit)
         header.addWidget(back_btn)
         
@@ -97,6 +85,7 @@ class AlertDetailsPanel(QWidget):
         # Scroll area for details
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        ThemeManager.instance().theme_changed.connect(self._apply_theme)
         
         self.details_widget = QWidget()
         self.details_layout = QVBoxLayout()
@@ -107,8 +96,33 @@ class AlertDetailsPanel(QWidget):
         layout.addWidget(scroll)
         
         self.setLayout(layout)
+        self._last_show_args = None
         self._show_placeholder()
-    
+
+    def _style_back_button(self):
+        self._back_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: transparent;
+                color: {_palette().accent};
+                border: 1px solid {_palette().accent};
+                border-radius: 4px;
+                padding: 8px 15px;
+                font-size: 12px;
+            }}
+            QPushButton:hover {{
+                background-color: {_palette().accent};
+                color: {_palette().text_inverse};
+            }}
+        """)
+
+    def _apply_theme(self):
+        """Re-apply palette styles and re-render the current alert."""
+        self._style_back_button()
+        if self._last_show_args is not None:
+            self.show_alert(*self._last_show_args)
+        else:
+            self._show_placeholder()
+
     def _show_placeholder(self):
         """Show placeholder text"""
         self._clear_details()
@@ -142,6 +156,7 @@ class AlertDetailsPanel(QWidget):
         alert with ``alert_classification`` (older callers only pass the
         classification text).
         """
+        self._last_show_args = (batch_id, alert_classification, alert_id)
         try:
             result = self.bridge.get_alert_by_id(batch_id)
             if not result:
@@ -291,8 +306,9 @@ class AlertDetailsPanel(QWidget):
         
         # Content box
         content_frame = QFrame()
+        content_frame.setObjectName("sectionContent")
         content_frame.setStyleSheet(f"""
-            QFrame {{
+            QFrame#sectionContent {{
                 background-color: {_palette().surface};
                 border-left: 3px solid {accent_color};
                 border-radius: 4px;
@@ -341,8 +357,9 @@ class AlertDetailsPanel(QWidget):
         self.details_layout.addWidget(header)
 
         frame = QFrame()
+        frame.setObjectName("feedbackSection")
         frame.setStyleSheet(f"""
-            QFrame {{
+            QFrame#feedbackSection {{
                 background-color: {_palette().surface};
                 border-left: 3px solid {_palette().accent};
                 border-radius: 4px;

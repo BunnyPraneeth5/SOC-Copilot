@@ -10,7 +10,7 @@ from typing import Optional
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
-    QGroupBox, QGridLayout, QPushButton
+    QGroupBox, QGridLayout, QPushButton, QComboBox, QCheckBox
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
@@ -57,12 +57,13 @@ class ToggleSwitch(QFrame):
             layout.addStretch()
         
         self.setLayout(layout)
-    
+        ThemeManager.instance().theme_changed.connect(self._update_style)
+
     def _update_style(self):
         p = _palette()
         if self._state:
             self.setStyleSheet(f"""
-                QFrame {{
+                ToggleSwitch {{
                     background-color: {p.success};
                     border-radius: 15px;
                     border: 2px solid {p.success};
@@ -76,7 +77,7 @@ class ToggleSwitch(QFrame):
             """)
         else:
             self.setStyleSheet(f"""
-                QFrame {{
+                ToggleSwitch {{
                     background-color: {p.text_muted};
                     border-radius: 15px;
                     border: 2px solid {p.border};
@@ -137,23 +138,35 @@ class StatusIndicator(QFrame):
         layout.addWidget(self.dot)
         
         # Label
-        label_widget = QLabel(f"{label}:")
-        label_widget.setStyleSheet(
+        self._label_widget = QLabel(f"{label}:")
+        self._label_widget.setStyleSheet(
             f"color: {_palette().text_muted}; font-weight: bold;"
         )
-        layout.addWidget(label_widget)
+        layout.addWidget(self._label_widget)
 
         # Status value
         self.status_label = QLabel(status)
         layout.addWidget(self.status_label)
-        
+
         layout.addStretch()
         self.setLayout(layout)
-    
+        self._color = color
+        ThemeManager.instance().theme_changed.connect(self._apply_theme)
+
+    def _apply_theme(self):
+        self._label_widget.setStyleSheet(
+            f"color: {_palette().text_muted}; font-weight: bold;"
+        )
+        self._update_dot()
+
+    def _update_dot(self):
+        self.dot.setStyleSheet(f"color: {self._color}; font-size: 16px;")
+
     def update_status(self, status: str, color: str):
         """Update status text and color"""
+        self._color = color
         self.status_label.setText(status)
-        self.dot.setStyleSheet(f"color: {color}; font-size: 16px;")
+        self._update_dot()
 
 
 class ConfigPanel(QWidget):
@@ -192,10 +205,32 @@ class ConfigPanel(QWidget):
         title.setFont(QFont("Arial", 16, QFont.Weight.Bold))
         layout.addWidget(title)
         
+        # Appearance section (theme + colour-blind-safe severities)
+        appearance_group = QGroupBox("Appearance")
+        appearance_layout = QHBoxLayout()
+
+        appearance_layout.addWidget(QLabel("Theme:"))
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItems(["Dark", "Light"])
+        tm = ThemeManager.instance()
+        self.theme_combo.setCurrentIndex(0 if tm.theme_name == "dark" else 1)
+        self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
+        appearance_layout.addWidget(self.theme_combo)
+
+        self.colorblind_check = QCheckBox("Colour-blind-safe severity colours")
+        self.colorblind_check.setChecked(tm.colorblind)
+        self.colorblind_check.toggled.connect(self._on_colorblind_toggled)
+        appearance_layout.addWidget(self.colorblind_check)
+
+        appearance_layout.addStretch()
+        appearance_group.setLayout(appearance_layout)
+        layout.addWidget(appearance_group)
+
         # Restart warning (hidden by default)
         self.restart_warning = QFrame()
+        self.restart_warning.setObjectName("restartWarning")
         self.restart_warning.setStyleSheet(f"""
-            QFrame {{
+            QFrame#restartWarning {{
                 background-color: {_palette().warning};
                 border-radius: 5px;
                 padding: 10px;
@@ -205,6 +240,7 @@ class ConfigPanel(QWidget):
         warning_icon = QLabel("⚠️")
         warning_icon.setFont(QFont("Arial", 18))
         warning_text = QLabel("Configuration changed. Restart required for changes to take effect.")
+        self._warning_text = warning_text
         warning_text.setStyleSheet(
             f"color: {_palette().text_inverse}; font-weight: bold;"
         )
@@ -301,6 +337,32 @@ class ConfigPanel(QWidget):
             providers_layout.addWidget(indicator)
 
         self.check_providers_button = QPushButton("Check connectivity")
+        self._style_check_button()
+        self.check_providers_button.clicked.connect(self._on_check_providers)
+        providers_layout.addWidget(self.check_providers_button)
+
+        providers_group.setLayout(providers_layout)
+        layout.addWidget(providers_group)
+
+        # Info text
+        info_label = QLabel(
+            "Appearance changes apply immediately and are saved for next launch. "
+            "This panel shows the current configuration and system status; the system "
+            "logs toggle still requires a restart. All other indicators are read-only. "
+            "Use 'Check connectivity' to probe threat-intelligence providers (requires online enrichment)."
+        )
+        self._info_label = info_label
+        info_label.setStyleSheet(
+            f"color: {_palette().text_muted}; font-style: italic;"
+        )
+        info_label.setWordWrap(True)
+        layout.addWidget(info_label)
+
+        layout.addStretch()
+        self.setLayout(layout)
+        ThemeManager.instance().theme_changed.connect(self._apply_theme)
+
+    def _style_check_button(self):
         self.check_providers_button.setStyleSheet(f"""
             QPushButton {{
                 background-color: {_palette().info};
@@ -315,27 +377,40 @@ class ConfigPanel(QWidget):
                 color: {_palette().text_muted};
             }}
         """)
-        self.check_providers_button.clicked.connect(self._on_check_providers)
-        providers_layout.addWidget(self.check_providers_button)
 
-        providers_group.setLayout(providers_layout)
-        layout.addWidget(providers_group)
+    def _apply_theme(self):
+        """Re-apply palette-derived styles and refresh indicator colours."""
+        p = _palette()
+        self.restart_warning.setStyleSheet(f"""
+            QFrame#restartWarning {{
+                background-color: {p.warning};
+                border-radius: 5px;
+                padding: 10px;
+            }}
+        """)
+        self._warning_text.setStyleSheet(
+            f"color: {p.text_inverse}; font-weight: bold;"
+        )
+        self._style_check_button()
+        self._info_label.setStyleSheet(
+            f"color: {p.text_muted}; font-style: italic;"
+        )
+        # Keep the appearance controls in sync (no signal re-entry)
+        tm = ThemeManager.instance()
+        self.theme_combo.blockSignals(True)
+        self.theme_combo.setCurrentIndex(0 if tm.theme_name == "dark" else 1)
+        self.theme_combo.blockSignals(False)
+        self.colorblind_check.blockSignals(True)
+        self.colorblind_check.setChecked(tm.colorblind)
+        self.colorblind_check.blockSignals(False)
+        self._refresh_status()
 
-        # Info text
-        info_label = QLabel(
-            "This panel shows the current configuration and system status. "
-            "Only the system logs toggle can be modified. All other indicators are read-only. "
-            "Use 'Check connectivity' to probe threat-intelligence providers (requires online enrichment)."
-        )
-        info_label.setStyleSheet(
-            f"color: {_palette().text_muted}; font-style: italic;"
-        )
-        info_label.setWordWrap(True)
-        layout.addWidget(info_label)
-        
-        layout.addStretch()
-        self.setLayout(layout)
-    
+    def _on_theme_changed(self, index: int):
+        ThemeManager.instance().set_theme("dark" if index == 0 else "light")
+
+    def _on_colorblind_toggled(self, checked: bool):
+        ThemeManager.instance().set_colorblind(checked)
+
     def _on_toggle_changed(self, new_state: bool):
         """Handle toggle state change"""
         success = self.config_manager.set_system_logs_enabled(new_state)

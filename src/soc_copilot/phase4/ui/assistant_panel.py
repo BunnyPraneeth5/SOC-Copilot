@@ -21,18 +21,87 @@ class AssistantPanel(QWidget):
         super().__init__()
         self.current_alert = None
         self._init_ui()
-    
+        ThemeManager.instance().theme_changed.connect(self._apply_theme)
+
+    def _apply_theme(self):
+        """Re-apply palette-derived styles after a theme switch."""
+        p = _palette()
+        self._header.setStyleSheet(f"color: {p.accent};")
+        self.chat_display.setStyleSheet(f"""
+            QTextEdit {{
+                background-color: {p.surface};
+                color: {p.text};
+                border: 1px solid {p.info_bg};
+                border-radius: 8px;
+                padding: 12px;
+                font-size: 13px;
+                line-height: 1.5;
+            }}
+        """)
+        for btn in self.quick_buttons:
+            btn.setStyleSheet(self._quick_button_style(p))
+        self._input_frame.setStyleSheet(f"""
+            QFrame#chatInputFrame {{
+                background-color: {p.surface};
+                border-radius: 8px;
+            }}
+        """)
+        self.input_field.setStyleSheet(f"""
+            QLineEdit {{
+                background-color: transparent;
+                border: none;
+                color: {p.text};
+                font-size: 13px;
+                padding: 5px;
+            }}
+        """)
+        self.send_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {p.accent};
+                color: {p.text_inverse};
+                border: none;
+                border-radius: 5px;
+                padding: 8px 16px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {p.accent_hover};
+            }}
+        """)
+
+    @staticmethod
+    def _quick_button_style(p) -> str:
+        return f"""
+            QPushButton {{
+                background-color: {p.surface};
+                color: {p.text};
+                border: 1px solid {p.info_bg};
+                border-radius: 5px;
+                padding: 8px 12px;
+                font-size: 11px;
+            }}
+            QPushButton:hover {{
+                background-color: {p.info_bg};
+                border-color: {p.accent};
+            }}
+            QPushButton:disabled {{
+                background-color: {p.surface};
+                color: {p.text_muted};
+            }}
+        """
+
     def _init_ui(self):
         layout = QVBoxLayout()
         layout.setSpacing(10)
         layout.setContentsMargins(15, 15, 15, 15)
-        
+
         # Header
         header = QLabel("🤖 SOC Assistant")
         header.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
+        self._header = header
         header.setStyleSheet(f"color: {_palette().accent};")
         layout.addWidget(header)
-        
+
         # Chat display
         self.chat_display = QTextEdit()
         self.chat_display.setReadOnly(True)
@@ -52,7 +121,8 @@ class AssistantPanel(QWidget):
         
         # Quick action buttons
         actions_frame = QFrame()
-        actions_frame.setStyleSheet("background: transparent;")
+        actions_frame.setStyleSheet("QFrame#chatActions { background: transparent; }")
+        actions_frame.setObjectName("chatActions")
         actions_layout = QHBoxLayout()
         actions_layout.setSpacing(8)
         actions_layout.setContentsMargins(0, 0, 0, 0)
@@ -67,24 +137,7 @@ class AssistantPanel(QWidget):
         
         for text, cmd in quick_actions:
             btn = QPushButton(text)
-            btn.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: {p.surface};
-                    color: {p.text};
-                    border: 1px solid {p.info_bg};
-                    border-radius: 5px;
-                    padding: 8px 12px;
-                    font-size: 11px;
-                }}
-                QPushButton:hover {{
-                    background-color: {p.info_bg};
-                    border-color: {p.accent};
-                }}
-                QPushButton:disabled {{
-                    background-color: {p.surface};
-                    color: {p.text_muted};
-                }}
-            """)
+            btn.setStyleSheet(self._quick_button_style(p))
             btn.clicked.connect(lambda checked, c=cmd: self._handle_quick_action(c))
             actions_layout.addWidget(btn)
             self.quick_buttons.append(btn)
@@ -94,8 +147,10 @@ class AssistantPanel(QWidget):
         
         # Input area
         input_frame = QFrame()
+        input_frame.setObjectName("chatInputFrame")
+        self._input_frame = input_frame
         input_frame.setStyleSheet(f"""
-            QFrame {{
+            QFrame#chatInputFrame {{
                 background-color: {p.surface};
                 border-radius: 8px;
             }}

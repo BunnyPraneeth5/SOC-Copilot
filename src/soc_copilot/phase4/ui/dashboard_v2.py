@@ -101,12 +101,18 @@ class ThreatBanner(QFrame):
         
         layout.addLayout(text_layout)
         layout.addStretch()
-        
+
         self.setLayout(layout)
+        self._level_args = ("normal", 0, 0)
         self.set_level("normal", 0, 0)
-    
+        ThemeManager.instance().theme_changed.connect(self._apply_theme)
+
+    def _apply_theme(self):
+        self.set_level(*self._level_args)
+
     def set_level(self, level: str, critical: int, high: int):
         """Update threat level"""
+        self._level_args = (level, critical, high)
         p = _palette()
         levels = {
             "loading": (p.surface, p.text_muted, "⏳", "LOADING"),
@@ -119,7 +125,7 @@ class ThreatBanner(QFrame):
         bg, fg, icon, text = levels.get(level, levels["normal"])
         
         self.setStyleSheet(f"""
-            QFrame {{
+            ThreatBanner {{
                 background-color: {bg};
                 border: 2px solid {fg};
                 border-radius: 10px;
@@ -146,15 +152,23 @@ class SystemStatusStrip(QFrame):
     def __init__(self):
         super().__init__()
         self.setFixedHeight(40)
+        self._separators = []
         self._init_ui()
-    
-    def _init_ui(self):
+        ThemeManager.instance().theme_changed.connect(self._apply_theme)
+
+    def _apply_theme(self):
+        p = _palette()
         self.setStyleSheet(f"""
-            QFrame {{
-                background-color: {_palette().surface};
-                border-bottom: 1px solid {_palette().surface_alt};
+            SystemStatusStrip {{
+                background-color: {p.surface};
+                border-bottom: 1px solid {p.surface_alt};
             }}
         """)
+        for sep in self._separators:
+            sep.setStyleSheet(f"color: {p.scrollbar};")
+
+    def _init_ui(self):
+        self._apply_theme()
 
         layout = QHBoxLayout()
         layout.setContentsMargins(20, 0, 20, 0)
@@ -181,6 +195,7 @@ class SystemStatusStrip(QFrame):
     def _separator(self):
         sep = QLabel("|")
         sep.setStyleSheet(f"color: {_palette().scrollbar};")
+        self._separators.append(sep)
         return sep
     
     def update_status(self, pipeline: bool, sources: int, running: bool, killswitch: bool):
@@ -220,19 +235,25 @@ class MetricCard(QFrame):
         self.setFixedHeight(90)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._init_ui(title, icon, color)
-    
-    def _init_ui(self, title: str, icon: str, color: str):
+        ThemeManager.instance().theme_changed.connect(self._apply_theme)
+
+    def _apply_theme(self):
         p = _palette()
         self.setStyleSheet(f"""
-            QFrame {{
+            MetricCard {{
                 background-color: {p.surface};
-                border-left: 4px solid {color};
+                border-left: 4px solid {self.color};
                 border-radius: 6px;
             }}
-            QFrame:hover {{
+            MetricCard:hover {{
                 background-color: {p.surface_alt};
             }}
         """)
+        if getattr(self, "value_label", None) is not None:
+            self.value_label.setStyleSheet(f"color: {self.color};")
+
+    def _init_ui(self, title: str, icon: str, color: str):
+        self._apply_theme()
         
         layout = QVBoxLayout()
         layout.setContentsMargins(15, 10, 15, 10)
@@ -251,7 +272,7 @@ class MetricCard(QFrame):
         
         self.value_label = QLabel("0")
         self.value_label.setFont(QFont("Segoe UI", 24, QFont.Weight.Bold))
-        self.value_label.setStyleSheet(f"color: {color};")
+        self.value_label.setStyleSheet(f"color: {self.color};")
         
         layout.addLayout(header)
         layout.addWidget(self.value_label)
@@ -311,14 +332,10 @@ class QuickActionsBar(QFrame):
         super().__init__()
         self.setFixedHeight(60)
         self._init_ui()
-    
-    def _init_ui(self):
-        layout = QHBoxLayout()
-        layout.setContentsMargins(0, 10, 0, 10)
-        layout.setSpacing(10)
-        
+        ThemeManager.instance().theme_changed.connect(self._apply_theme)
+
+    def _apply_theme(self):
         p = _palette()
-        self.upload_btn = QPushButton("📁 Upload Logs")
         self.upload_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {p.accent};
@@ -332,9 +349,6 @@ class QuickActionsBar(QFrame):
             QPushButton:hover {{ background-color: {p.accent_hover}; }}
             QPushButton:disabled {{ background-color: {p.surface_alt}; color: {p.text_muted}; }}
         """)
-        self.upload_btn.clicked.connect(self.upload_clicked.emit)
-
-        self.refresh_btn = QPushButton("🔄 Refresh")
         self.refresh_btn.setStyleSheet(f"""
             QPushButton {{
                 background-color: {p.surface_alt};
@@ -346,6 +360,17 @@ class QuickActionsBar(QFrame):
             }}
             QPushButton:hover {{ background-color: {p.scrollbar}; }}
         """)
+
+    def _init_ui(self):
+        layout = QHBoxLayout()
+        layout.setContentsMargins(0, 10, 0, 10)
+        layout.setSpacing(10)
+
+        self.upload_btn = QPushButton("📁 Upload Logs")
+        self.upload_btn.clicked.connect(self.upload_clicked.emit)
+
+        self.refresh_btn = QPushButton("🔄 Refresh")
+        self._apply_theme()
         self.refresh_btn.clicked.connect(self.refresh_clicked.emit)
         
         layout.addWidget(self.upload_btn)
@@ -362,8 +387,21 @@ class RecentAlertsTimeline(QFrame):
     
     def __init__(self):
         super().__init__()
+        self._last_alerts = []
         self._init_ui()
-    
+        ThemeManager.instance().theme_changed.connect(self._apply_theme)
+
+    def _apply_theme(self):
+        p = _palette()
+        if getattr(self, "count_label", None) is not None:
+            self.count_label.setStyleSheet(
+                f"color: {p.text_muted}; font-size: 11px;"
+            )
+            self.empty_label.setStyleSheet(
+                f"color: {p.text_muted}; padding: 40px;"
+            )
+            self.update_alerts(self._last_alerts)
+
     def _init_ui(self):
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
@@ -410,6 +448,7 @@ class RecentAlertsTimeline(QFrame):
     
     def update_alerts(self, alerts_data: list):
         """Update with latest 10 alerts"""
+        self._last_alerts = alerts_data
         if not alerts_data:
             self.table.hide()
             self.empty_label.show()
@@ -515,6 +554,14 @@ class Dashboard(QWidget):
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
         self.progress_bar.setFixedHeight(6)
+        self._style_progress_bar()
+        layout.addWidget(self.progress_bar)
+
+        self.setLayout(layout)
+
+        ThemeManager.instance().theme_changed.connect(self._style_progress_bar)
+
+    def _style_progress_bar(self):
         p = _palette()
         self.progress_bar.setStyleSheet(f"""
             QProgressBar {{
@@ -528,10 +575,7 @@ class Dashboard(QWidget):
                 border-radius: 3px;
             }}
         """)
-        layout.addWidget(self.progress_bar)
-        
-        self.setLayout(layout)
-    
+
     def refresh(self):
         """Unified refresh - single data fetch"""
         # Show loading state

@@ -36,7 +36,14 @@ class ThreatLevelBanner(QFrame):
         self._current_level = "clear"
         self._action_count = 0
         self._init_ui()
-    
+        ThemeManager.instance().theme_changed.connect(self._apply_level_styles)
+
+    def _apply_level_styles(self):
+        """Re-apply level-dependent styles (e.g. after a theme switch)."""
+        config = self._level_config(self._current_level)
+        self._apply_style(self._current_level)
+        self.threat_value.setStyleSheet(f"color: {config['fg']};")
+
     def _init_ui(self):
         self.setFixedHeight(80)
         self._apply_style("clear")
@@ -47,8 +54,9 @@ class ThreatLevelBanner(QFrame):
         
         # Left side: Threat level pill
         self.threat_container = QFrame()
+        self.threat_container.setObjectName("threatPill")
         self.threat_container.setStyleSheet("""
-            QFrame {
+            QFrame#threatPill {
                 background-color: rgba(0, 0, 0, 0.3);
                 border-radius: 20px;
                 padding: 5px 15px;
@@ -127,7 +135,7 @@ class ThreatLevelBanner(QFrame):
     def _apply_style(self, level: str):
         config = self._level_config(level)
         self.setStyleSheet(f"""
-            QFrame {{
+            ThreatLevelBanner {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
                     stop:0 {config['bg']}, stop:1 {_palette().bg});
                 border: 2px solid {config['border']};
@@ -155,10 +163,9 @@ class ThreatLevelBanner(QFrame):
         self._action_count = total
         
         # Update visuals
-        self._apply_style(level)
+        self._apply_level_styles()
         self.threat_icon.setText(config["icon"])
         self.threat_value.setText(config["label"])
-        self.threat_value.setStyleSheet(f"color: {config['fg']};")
         
         self.action_count_label.setText(f"{total} Alert{'s' if total != 1 else ''}")
         self.action_text.setText(action_text)
@@ -196,13 +203,13 @@ class RecentAlertItem(QFrame):
         color = self._priority_color(self.priority)
 
         self.setStyleSheet(f"""
-            QFrame {{
+            RecentAlertItem {{
                 background-color: {p.surface};
                 border-left: 4px solid {color};
                 border-radius: 6px;
                 margin: 2px 0;
             }}
-            QFrame:hover {{
+            RecentAlertItem:hover {{
                 background-color: {p.surface_alt};
             }}
         """)
@@ -268,11 +275,25 @@ class RecentAlertsTimeline(QFrame):
     def __init__(self):
         super().__init__()
         self._alert_items = []
+        self._last_alerts = []
+        self._last_results_count = 0
         self._init_ui()
-    
+        ThemeManager.instance().theme_changed.connect(self._apply_theme)
+
+    def _apply_theme(self):
+        """Rebuild palette-derived styles and repaint alert rows."""
+        self.setStyleSheet(f"""
+            RecentAlertsTimeline {{
+                background-color: {_palette().input_bg};
+                border-radius: 10px;
+            }}
+        """)
+        if hasattr(self, "alerts_layout"):
+            self.update_alerts(self._last_alerts, self._last_results_count)
+
     def _init_ui(self):
         self.setStyleSheet(f"""
-            QFrame {{
+            RecentAlertsTimeline {{
                 background-color: {_palette().input_bg};
                 border-radius: 10px;
             }}
@@ -356,6 +377,8 @@ class RecentAlertsTimeline(QFrame):
     
     def update_alerts(self, alerts_data: list, results_count: int = 0):
         """Update timeline with new alerts"""
+        self._last_alerts = alerts_data
+        self._last_results_count = results_count
         self._clear_alerts()
         
         if not alerts_data:
@@ -392,25 +415,12 @@ class EmptyStateCard(QFrame):
         super().__init__()
         self._init_ui(icon, title, description, action_text, state_type)
     
-    def _init_ui(self, icon: str, title: str, description: str, 
+    def _init_ui(self, icon: str, title: str, description: str,
                  action_text: str, state_type: str):
-        
-        p = _palette()
-        colors = {
-            "info": {"bg": p.surface, "title": p.accent, "border": p.surface_alt},
-            "warning": {"bg": p.warning_bg, "title": p.sev_medium, "border": p.warning},
-            "error": {"bg": p.danger_bg, "title": p.sev_critical, "border": p.danger},
-            "success": {"bg": p.success_bg, "title": p.success, "border": p.success}
-        }
-        config = colors.get(state_type, colors["info"])
-        
-        self.setStyleSheet(f"""
-            QFrame {{
-                background-color: {config['bg']};
-                border: 1px solid {config['border']};
-                border-radius: 12px;
-            }}
-        """)
+
+        self._state_type = state_type
+        self._apply_theme()
+        ThemeManager.instance().theme_changed.connect(self._apply_theme)
         
         layout = QVBoxLayout()
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -424,7 +434,7 @@ class EmptyStateCard(QFrame):
         
         title_label = QLabel(title)
         title_label.setFont(QFont("Segoe UI", 18, QFont.Weight.Bold))
-        title_label.setStyleSheet(f"color: {config['title']};")
+        self._title_label = title_label
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title_label)
         
@@ -438,7 +448,38 @@ class EmptyStateCard(QFrame):
         if action_text:
             action_btn = QPushButton(action_text)
             action_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            action_btn.setStyleSheet(f"""
+            self._action_btn = action_btn
+            action_btn.clicked.connect(self.action_clicked.emit)
+            layout.addWidget(action_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+        else:
+            self._action_btn = None
+
+        self._apply_theme()
+        self.setLayout(layout)
+
+    def _card_config(self) -> dict:
+        p = _palette()
+        colors = {
+            "info": {"bg": p.surface, "title": p.accent, "border": p.surface_alt},
+            "warning": {"bg": p.warning_bg, "title": p.sev_medium, "border": p.warning},
+            "error": {"bg": p.danger_bg, "title": p.sev_critical, "border": p.danger},
+            "success": {"bg": p.success_bg, "title": p.success, "border": p.success}
+        }
+        return colors.get(self._state_type, colors["info"])
+
+    def _apply_theme(self):
+        config = self._card_config()
+        self.setStyleSheet(f"""
+            EmptyStateCard {{
+                background-color: {config['bg']};
+                border: 1px solid {config['border']};
+                border-radius: 12px;
+            }}
+        """)
+        if getattr(self, "_title_label", None) is not None:
+            self._title_label.setStyleSheet(f"color: {config['title']};")
+        if getattr(self, "_action_btn", None) is not None:
+            self._action_btn.setStyleSheet(f"""
                 QPushButton {{
                     background-color: {config['title']};
                     color: {_palette().text_inverse};
@@ -452,10 +493,6 @@ class EmptyStateCard(QFrame):
                     opacity: 0.9;
                 }}
             """)
-            action_btn.clicked.connect(self.action_clicked.emit)
-            layout.addWidget(action_btn, alignment=Qt.AlignmentFlag.AlignCenter)
-        
-        self.setLayout(layout)
 
 
 class QuickActionsBar(QFrame):
@@ -468,12 +505,14 @@ class QuickActionsBar(QFrame):
     
     def __init__(self):
         super().__init__()
+        self._buttons = []  # (button, primary)
         self._init_ui()
-    
+        ThemeManager.instance().theme_changed.connect(self._apply_theme)
+
     def _init_ui(self):
         self.setFixedHeight(60)
         self.setStyleSheet("""
-            QFrame {
+            QuickActionsBar {
                 background-color: transparent;
             }
         """)
@@ -508,7 +547,15 @@ class QuickActionsBar(QFrame):
     def _create_button(self, text: str, primary: bool = False) -> QPushButton:
         btn = QPushButton(text)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        
+        self._buttons.append((btn, primary))
+        self._style_button(btn, primary)
+        return btn
+
+    def _apply_theme(self):
+        for btn, primary in getattr(self, "_buttons", []):
+            self._style_button(btn, primary)
+
+    def _style_button(self, btn: QPushButton, primary: bool):
         p = _palette()
         if primary:
             btn.setStyleSheet(f"""
@@ -577,22 +624,27 @@ class CompactMetricCard(QFrame):
         self._trend = 0
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._init_ui()
-    
-    def _init_ui(self):
+        ThemeManager.instance().theme_changed.connect(self._apply_theme)
+
+    def _apply_theme(self):
         style = self._style_for(self.priority)
-        
-        self.setFixedHeight(90)
         self.setStyleSheet(f"""
-            QFrame {{
+            CompactMetricCard {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
                     stop:0 {style['bg']}, stop:1 {self._darken(style['bg'])});
                 border-radius: 10px;
             }}
-            QFrame:hover {{
+            CompactMetricCard:hover {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
                     stop:0 {self._lighten(style['bg'])}, stop:1 {style['bg']});
             }}
         """)
+
+    def _init_ui(self):
+        style = self._style_for(self.priority)
+
+        self.setFixedHeight(90)
+        self._apply_theme()
         
         layout = QVBoxLayout()
         layout.setContentsMargins(15, 12, 15, 12)
@@ -672,16 +724,22 @@ class SystemHealthGrid(QFrame):
     def __init__(self):
         super().__init__()
         self._init_ui()
-    
-    def _init_ui(self):
+        ThemeManager.instance().theme_changed.connect(self._apply_theme)
+
+    def _apply_theme(self):
         p = _palette()
         self.setStyleSheet(f"""
-            QFrame {{
+            SystemHealthGrid {{
                 background-color: {p.surface};
                 border: 1px solid {p.surface_alt};
                 border-radius: 10px;
             }}
         """)
+        if getattr(self, "_title", None) is not None:
+            self._title.setStyleSheet(f"color: {p.accent};")
+
+    def _init_ui(self):
+        self._apply_theme()
 
         layout = QVBoxLayout()
         layout.setContentsMargins(15, 12, 15, 12)
@@ -690,7 +748,8 @@ class SystemHealthGrid(QFrame):
         # Header
         title = QLabel("System Health")
         title.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
-        title.setStyleSheet(f"color: {p.accent};")
+        self._title = title
+        title.setStyleSheet(f"color: {_palette().accent};")
         layout.addWidget(title)
         
         # Status rows

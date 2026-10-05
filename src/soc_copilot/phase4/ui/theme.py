@@ -1,7 +1,8 @@
 """Central theme system for the SOC Copilot UI (UX-1).
 
-One source of truth for colours / fonts / spacing. UX-2 will add a
-persisted light/dark toggle on top of ``ThemeManager.set_theme``.
+One source of truth for colours / fonts / spacing. UX-2 adds the
+persisted light/dark toggle (``QSettings`` / ``SOC_COPILOT_THEME``) and
+Okabe-Ito colour-blind-safe severity overrides on top of it.
 
 Colour mapping (legacy inline hex -> token) — DARK palette preserves the
 existing look:
@@ -36,9 +37,10 @@ existing look:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, replace
 
-from PyQt6.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject, QSettings, pyqtSignal
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +125,7 @@ LIGHT = Palette(
     info="#1565c0",
     sev_critical="#c62828",
     sev_high="#e65100",
-    sev_medium="#f9a825",
+    sev_medium="#b26a00",
     sev_low="#1565c0",
     sev_info="#5a6072",
     danger_bg="#f8d7d7",
@@ -133,6 +135,30 @@ LIGHT = Palette(
 )
 
 _PALETTES = {p.name: p for p in (DARK, LIGHT)}
+
+# Colour-blind-safe severity overrides (Okabe-Ito palette).
+# Applied via dataclasses.replace() when the colour-blind flag is on;
+# severities are always paired with their text label, never colour alone.
+COLORBLIND_OVERRIDES = {
+    "dark": {
+        "sev_critical": "#D55E00",  # vermillion
+        "sev_high": "#E69F00",      # orange
+        "sev_medium": "#F0E442",    # yellow
+        "sev_low": "#56B4E9",       # sky blue
+        "sev_info": "#999999",      # grey
+    },
+    "light": {
+        "sev_critical": "#B23A00",  # dark vermillion
+        "sev_high": "#A86E00",      # dark orange
+        "sev_medium": "#8A7F00",    # dark yellow
+        "sev_low": "#0072B2",       # blue
+        "sev_info": "#5a6072",      # grey
+    },
+}
+
+_SETTINGS_KEY_THEME = "appearance/theme"
+_SETTINGS_KEY_COLORBLIND = "appearance/colorblind"
+_ENV_THEME = "SOC_COPILOT_THEME"
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +203,7 @@ def build_stylesheet(p: Palette) -> str:
     QLabel {{
         color: {p.text};
         background: transparent;
+        border: none;
     }}
     QLabel[role="muted"] {{
         color: {p.text_muted};
@@ -262,6 +289,33 @@ def build_stylesheet(p: Palette) -> str:
         border: 1px solid {p.border};
         selection-background-color: {p.accent};
         selection-color: {p.text_inverse};
+    }}
+    QCheckBox, QRadioButton {{
+        color: {p.text};
+        background: transparent;
+        spacing: 6px;
+    }}
+    QCheckBox::indicator, QRadioButton::indicator {{
+        width: 14px;
+        height: 14px;
+        border: 1px solid {p.border};
+        background-color: {p.input_bg};
+    }}
+    QCheckBox::indicator {{
+        border-radius: 3px;
+    }}
+    QRadioButton::indicator {{
+        border-radius: 7px;
+    }}
+    QCheckBox::indicator:checked {{
+        background-color: {p.accent};
+        border-color: {p.accent};
+        image: none;
+    }}
+    QRadioButton::indicator:checked {{
+        background-color: {p.accent};
+        border-color: {p.accent};
+        image: none;
     }}
 
     /* ----- containers ----- */
@@ -441,25 +495,52 @@ class ThemeManager(QObject):
 
     def __init__(self) -> None:
         super().__init__()
+        self._base_name = "dark"
+        self._colorblind = False
         self._palette = DARK
+        self._settings: QSettings | None = None
 
     @classmethod
     def instance(cls) -> "ThemeManager":
-        if cls._instance is None:
-            cls._instance = ThemeManager()
-        return cls._instance
+        inst = cls._instance
+        if inst is not None:
+            # The C++ QObject is destroyed together with its QApplication;
+            # resurrect the manager if that happened.
+            try:
+                from PyQt6.sip import isdeleted
+                if isdeleted(inst):
+                    inst = None
+            except Exception:
+                inst = None
+        if inst is None:
+            inst = ThemeManager()
+            cls._instance = inst
+        return inst
 
     @property
     def palette(self) -> Palette:
         return self._palette
 
-    def set_theme(self, name: str) -> None:
-        """Switch theme by name ('dark' | 'light')."""
-        if name not in _PALETTES:
-            raise ValueError(
-                f"Unknown theme '{name}'; expected one of {sorted(_PALETTES)}"
-            )
-        self._palette = _PALETTES[name]
+    @property
+    def theme_name(self) -> str:
+        return self._base_name
+
+    @property
+    def colorblind(self) -> bool:
+        return self._colorblind
+
+    # ----- effective palette ------------------------------------------------
+
+    def _rebuild_palette(self) -> None:
+        base = _PALETTES[self._base_name]
+        overrides = (
+            COLORBLIND_OVERRIDES[self._base_name] if self._colorblind else {}
+        )
+        self._palette = replace(base, **overrides)
+
+    def _refresh(self) -> None:
+        """Rebuild the effective palette, re-apply QSS, notify listeners."""
+        self._rebuild_palette()
         try:
             from PyQt6.QtWidgets import QApplication
             app = QApplication.instance()
@@ -467,7 +548,64 @@ class ThemeManager(QObject):
             app = None
         if app is not None:
             self.apply(app)
-        self.theme_changed.emit(self._palette)
+        try:
+            self.theme_changed.emit(self._palette)
+        except RuntimeError:
+            # Underlying QObject already deleted (e.g. app teardown)
+            pass
+
+    # ----- mutations ---------------------------------------------------------
+
+    def set_theme(self, name: str) -> None:
+        """Switch theme by name ('dark' | 'light')."""
+        if name not in _PALETTES:
+            raise ValueError(
+                f"Unknown theme '{name}'; expected one of {sorted(_PALETTES)}"
+            )
+        self._base_name = name
+        self._refresh()
+        self.save_preferences()
+
+    def set_colorblind(self, enabled: bool) -> None:
+        """Toggle the colour-blind-safe severity overrides."""
+        self._colorblind = bool(enabled)
+        self._refresh()
+        self.save_preferences()
+
+    # ----- persistence ---------------------------------------------------------
+
+    def _settings_or_default(self, settings: QSettings | None) -> QSettings:
+        if settings is not None:
+            return settings
+        if self._settings is None:
+            self._settings = QSettings("SOC Copilot", "SOC Copilot")
+        return self._settings
+
+    def load_preferences(self, settings: QSettings | None = None) -> None:
+        """Load theme preferences.
+
+        Precedence: saved setting > SOC_COPILOT_THEME env var > "dark".
+        Invalid values fall back to "dark". Colour-blind flag comes only
+        from the saved setting.
+        """
+        if settings is not None:
+            self._settings = settings
+        s = self._settings_or_default(settings)
+        saved = s.value(_SETTINGS_KEY_THEME, None)
+        if isinstance(saved, str) and saved in _PALETTES:
+            self._base_name = saved
+        else:
+            env = os.environ.get(_ENV_THEME, "").strip().lower()
+            self._base_name = env if env in _PALETTES else "dark"
+        cb = s.value(_SETTINGS_KEY_COLORBLIND, False)
+        self._colorblind = str(cb).lower() in ("true", "1", "yes", "on")
+        self._refresh()
+
+    def save_preferences(self, settings: QSettings | None = None) -> None:
+        """Persist current theme + colour-blind flag."""
+        s = self._settings_or_default(settings)
+        s.setValue(_SETTINGS_KEY_THEME, self._base_name)
+        s.setValue(_SETTINGS_KEY_COLORBLIND, self._colorblind)
 
     def apply(self, app) -> None:
         """Apply the current palette's global stylesheet to an app."""

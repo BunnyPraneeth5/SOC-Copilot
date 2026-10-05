@@ -68,9 +68,75 @@ class AllLogsView(QWidget):
         )
         self.empty_label.setFont(QFont("Segoe UI", 12))
         layout.addWidget(self.empty_label)
-        
+
         self.setLayout(layout)
-        
+        ThemeManager.instance().theme_changed.connect(self._apply_theme)
+
+    def _apply_theme(self):
+        """Re-apply palette-derived styles after a theme switch."""
+        p = _palette()
+        self.empty_label.setStyleSheet(
+            f"color: {p.text_muted}; font-style: italic; padding: 20px;"
+        )
+        if getattr(self, "counter_label", None) is not None:
+            self.counter_label.setStyleSheet(
+                f"color: {p.text_muted}; font-size: 11px;"
+            )
+            self._filter_label.setStyleSheet(
+                f"color: {p.text_muted}; font-size: 12px;"
+            )
+            self.class_filter.setStyleSheet(self._combo_style(p))
+            self.search_box.setStyleSheet(self._search_style(p))
+            self._refresh_btn.setStyleSheet(self._refresh_style(p))
+        self.refresh()
+
+    @staticmethod
+    def _combo_style(p) -> str:
+        return f"""
+            QComboBox {{
+                background-color: {p.surface_alt};
+                color: {p.text};
+                border: 1px solid {p.scrollbar};
+                border-radius: 4px;
+                padding: 5px 10px;
+                min-width: 100px;
+            }}
+            QComboBox::drop-down {{ border: none; }}
+            QComboBox QAbstractItemView {{
+                background-color: {p.surface_alt};
+                color: {p.text};
+                selection-background-color: {p.accent};
+                selection-color: {p.text_inverse};
+            }}
+        """
+
+    @staticmethod
+    def _search_style(p) -> str:
+        return f"""
+            QLineEdit {{
+                background-color: {p.surface_alt};
+                color: {p.text};
+                border: 1px solid {p.scrollbar};
+                border-radius: 4px;
+                padding: 5px 10px;
+                min-width: 200px;
+            }}
+        """
+
+    @staticmethod
+    def _refresh_style(p) -> str:
+        return f"""
+            QPushButton {{
+                background-color: {p.surface_alt};
+                color: {p.text};
+                border: 1px solid {p.scrollbar};
+                border-radius: 4px;
+                padding: 5px 10px;
+                font-size: 14px;
+            }}
+            QPushButton:hover {{ background-color: {p.scrollbar}; }}
+        """
+
     def _create_header(self) -> QHBoxLayout:
         header = QHBoxLayout()
         
@@ -89,64 +155,30 @@ class AllLogsView(QWidget):
         header.addStretch()
         
         # Classification filter
-        filter_label = QLabel("Filter:")
-        filter_label.setStyleSheet(
+        self._filter_label = QLabel("Filter:")
+        self._filter_label.setStyleSheet(
             f"color: {_palette().text_muted}; font-size: 12px;"
         )
-        header.addWidget(filter_label)
-        
+        header.addWidget(self._filter_label)
+
         self.class_filter = QComboBox()
         self.class_filter.addItems(["All", "Alerts Only", "Benign Only"])
         p = _palette()
-        self.class_filter.setStyleSheet(f"""
-            QComboBox {{
-                background-color: {p.surface_alt};
-                color: {p.text};
-                border: 1px solid {p.scrollbar};
-                border-radius: 4px;
-                padding: 5px 10px;
-                min-width: 100px;
-            }}
-            QComboBox::drop-down {{ border: none; }}
-            QComboBox QAbstractItemView {{
-                background-color: {p.surface_alt};
-                color: {p.text};
-                selection-background-color: {p.accent};
-                selection-color: {p.text_inverse};
-            }}
-        """)
+        self.class_filter.setStyleSheet(self._combo_style(p))
         self.class_filter.currentTextChanged.connect(self._on_filter_changed)
         header.addWidget(self.class_filter)
-        
+
         # Search box
         self.search_box = QLineEdit()
         self.search_box.setPlaceholderText("Search raw logs...")
-        self.search_box.setStyleSheet(f"""
-            QLineEdit {{
-                background-color: {p.surface_alt};
-                color: {p.text};
-                border: 1px solid {p.scrollbar};
-                border-radius: 4px;
-                padding: 5px 10px;
-                min-width: 200px;
-            }}
-        """)
+        self.search_box.setStyleSheet(self._search_style(p))
         self.search_box.textChanged.connect(self._on_search_changed)
         header.addWidget(self.search_box)
-        
+
         refresh_btn = QPushButton("🔄")
+        self._refresh_btn = refresh_btn
         refresh_btn.setToolTip("Refresh logs")
-        refresh_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {p.surface_alt};
-                color: {p.text};
-                border: 1px solid {p.scrollbar};
-                border-radius: 4px;
-                padding: 5px 10px;
-                font-size: 14px;
-            }}
-            QPushButton:hover {{ background-color: {p.scrollbar}; }}
-        """)
+        refresh_btn.setStyleSheet(self._refresh_style(p))
         refresh_btn.clicked.connect(self.refresh)
         header.addWidget(refresh_btn)
         

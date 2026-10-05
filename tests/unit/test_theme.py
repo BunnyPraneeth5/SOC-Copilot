@@ -111,10 +111,10 @@ class TestThemeManager:
         conn = tm.theme_changed.connect(emitted.append)
         try:
             tm.set_theme("light")
-            assert tm.palette is LIGHT
-            assert emitted and emitted[-1] is LIGHT
+            assert tm.palette == LIGHT
+            assert emitted and emitted[-1] == LIGHT
             tm.set_theme("dark")
-            assert tm.palette is DARK
+            assert tm.palette == DARK
         finally:
             tm.theme_changed.disconnect(conn)
             tm.set_theme("dark")  # ensure dark default for other tests

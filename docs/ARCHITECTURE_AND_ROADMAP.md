@@ -205,8 +205,8 @@ The following significant technical debt items have been explicitly addressed an
 
 - **Persistent alert storage:** Alerts live only in the in-memory `ResultStore` (max 1000 entries); no durable alert store exists yet. SQLite is currently used for governance, drift, and feedback data only.
 - **Claude/Anthropic adapter:** `ReportAgent` supports NVIDIA NIM and OpenRouter; an Anthropic adapter behind the same `ReportLLMAdapter` interface is not implemented.
-- **Two un-unified kill switches:** Phase 3 governance uses a SQLite-backed kill switch (`phase3/governance/killswitch.py`) while Phase 4 uses a `.kill` sentinel file (`phase4/kill_switch.py`). They are not synchronized.
-- **CLI-only subsystems:** Phase 2 feedback/drift/explainer and Phase 3 governance are reachable only via the CLI; they are not wired into the PyQt6 UI.
+- **Two intentionally-separate kill switches:** Phase 3 uses a SQLite-backed governance lock (`phase3/governance/killswitch.py`) while Phase 4 uses a `.kill` sentinel file for the emergency analysis stop (`phase4/kill_switch.py`, also reachable via `soc-copilot killswitch`). They serve different purposes and are deliberately not synchronized.
+- **Explainer is CLI-only:** Phase 2 feedback, drift monitoring, and Phase 3 audit logging are wired into the UI (analyst feedback on alert details, drift indicator + audit persistence via `AppController`); only the explainer remains CLI-only.
 - **UI domain investigations:** The orchestrator supports domains, but the alerts-table double-click only reads the source-IP column.
 - **Mobile companion app:** Shelved — needs the FastAPI layer first; revisit later.
 
@@ -282,7 +282,7 @@ The MCP integration and its UI binding are now implemented. The following milest
   - `check_provider_status()` performs a lightweight ping/auth check per provider and caches the result briefly.
   - Orchestrator reads live provider status at dispatch time; any provider that is down or unkeyed marks its corresponding agent as `Disabled` and the pipeline continues in local-only/offline mode.
 - **Risks:** Ping checks adding latency to startup; mitigate by running checks lazily on first use and caching aggressively.
-- **Status:** Not started — but the orchestrator already degrades gracefully today: it returns a local-only UNKNOWN-severity report when online enrichment is disabled, and a partial UNKNOWN-severity report when the LLM fails but at least one data agent returned data. The provider registry and status UI remain to be built.
+- **Status:** Done — `provider_registry.py` tracks `Configured`/`Available`/`Missing key`/`Offline`/`Disabled` per provider, Settings panel shows provider cards with a "Check connectivity" probe, the orchestrator dispatches agents only when their providers are usable, and `soc-copilot providers [--check]` exposes the same status table on the CLI.
 
 #### Milestone 5b: UI/UX Enhancements
 
@@ -305,7 +305,7 @@ The MCP integration and its UI binding are now implemented. The following milest
   - `ThemeManager` can switch palettes at runtime via `set_theme()` and re-apply the global stylesheet.
   - No behavioural regressions: layouts, texts, signal wiring, and the full test suite stay green.
 - **Risks:** Visual drift during migration; mitigated by mapping near-duplicate colours to the closest semantic token and screenshot-diffing key pages offscreen.
-- **Status:** In progress (UX-1 done; UX-2..UX-10 pending)
+- **Status:** In progress (UX-1, UX-2 done; UX-3..UX-10 pending)
 
 #### Milestone 6: Live Workflow Visualization (PyQt6-native)
 

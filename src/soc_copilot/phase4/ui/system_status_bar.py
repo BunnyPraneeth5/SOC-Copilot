@@ -74,7 +74,15 @@ class StatusIndicator(QWidget):
         
         self.setLayout(layout)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-    
+        ThemeManager.instance().theme_changed.connect(self._apply_theme)
+
+    def _apply_theme(self):
+        """Re-apply palette-derived styles after a theme switch."""
+        p = _palette()
+        self._update_led_style()
+        self.value.setStyleSheet(f"color: {p.accent};")
+        self.info_icon.setStyleSheet(f"color: {p.text_muted};")
+
     def _update_led_style(self):
         color = self._color_for(self._color)
         # Text shadow for glow effect
@@ -126,12 +134,8 @@ class SystemStatusBar(QFrame):
         self._init_polling()
     
     def _init_ui(self):
-        self.setStyleSheet(f"""
-            QFrame {{
-                background-color: {_palette().input_bg};
-                border-bottom: 1px solid {_palette().surface_alt};
-            }}
-        """)
+        self._separators = []
+        self._apply_theme()
         self.setFixedHeight(44)
         
         layout = QHBoxLayout()
@@ -181,10 +185,23 @@ class SystemStatusBar(QFrame):
         layout.addWidget(self.update_time)
         
         self.setLayout(layout)
-    
+        ThemeManager.instance().theme_changed.connect(self._apply_theme)
+
+    def _apply_theme(self):
+        p = _palette()
+        self.setStyleSheet(f"""
+            SystemStatusBar {{
+                background-color: {p.input_bg};
+                border-bottom: 1px solid {p.surface_alt};
+            }}
+        """)
+        for sep in getattr(self, "_separators", []):
+            sep.setStyleSheet(f"color: {p.surface_alt};")
+
     def _separator(self) -> QLabel:
         sep = QLabel("|")
         sep.setStyleSheet(f"color: {_palette().surface_alt};")
+        self._separators.append(sep)
         return sep
     
     def _init_polling(self):
@@ -338,48 +355,54 @@ class PermissionBanner(QFrame):
         self._init_ui(message, icon)
     
     def _init_ui(self, message: str, icon: str):
+        layout = QHBoxLayout()
+        layout.setContentsMargins(15, 10, 15, 10)
+
+        icon_label = QLabel(icon)
+        icon_label.setFont(QFont("Segoe UI Emoji", 14))
+        layout.addWidget(icon_label)
+
+        self._msg_label = QLabel(message)
+        self._msg_label.setWordWrap(True)
+        layout.addWidget(self._msg_label, 1)
+
+        # Action button
+        self._action_btn = QLabel("Run as Admin")
+        self._action_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        layout.addWidget(self._action_btn)
+
+        # Close button
+        self._close_btn = QLabel("✕")
+        self._close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._close_btn.mousePressEvent = lambda e: self._dismiss()
+        layout.addWidget(self._close_btn)
+
+        self._apply_theme()
+        ThemeManager.instance().theme_changed.connect(self._apply_theme)
+
+        self.setLayout(layout)
+
+    def _apply_theme(self):
+        p = _palette()
         self.setStyleSheet(f"""
-            QFrame {{
-                background-color: {_palette().warning_bg};
-                border: 1px solid {_palette().warning};
+            PermissionBanner {{
+                background-color: {p.warning_bg};
+                border: 1px solid {p.warning};
                 border-radius: 6px;
                 margin: 5px 15px;
             }}
         """)
-        
-        layout = QHBoxLayout()
-        layout.setContentsMargins(15, 10, 15, 10)
-        
-        icon_label = QLabel(icon)
-        icon_label.setFont(QFont("Segoe UI Emoji", 14))
-        layout.addWidget(icon_label)
-        
-        msg_label = QLabel(message)
-        msg_label.setStyleSheet(f"color: {_palette().warning}; font-size: 12px;")
-        msg_label.setWordWrap(True)
-        layout.addWidget(msg_label, 1)
-
-        # Action button
-        action_btn = QLabel("Run as Admin")
-        action_btn.setStyleSheet(f"""
-            color: {_palette().warning};
-            font-size: 11px;
-            text-decoration: underline;
-            padding: 5px 10px;
-        """)
-        action_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        layout.addWidget(action_btn)
-        
-        # Close button
-        close_btn = QLabel("✕")
-        close_btn.setStyleSheet(
-            f"color: {_palette().text_muted}; font-size: 14px; padding: 5px;"
-        )
-        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        close_btn.mousePressEvent = lambda e: self._dismiss()
-        layout.addWidget(close_btn)
-        
-        self.setLayout(layout)
+        if getattr(self, "_msg_label", None) is not None:
+            self._msg_label.setStyleSheet(f"color: {p.warning}; font-size: 12px;")
+            self._action_btn.setStyleSheet(f"""
+                color: {p.warning};
+                font-size: 11px;
+                text-decoration: underline;
+                padding: 5px 10px;
+            """)
+            self._close_btn.setStyleSheet(
+                f"color: {p.text_muted}; font-size: 14px; padding: 5px;"
+            )
     
     def _dismiss(self):
         self.hide()
@@ -394,9 +417,31 @@ class KillSwitchBanner(QFrame):
         self._init_ui()
     
     def _init_ui(self):
+        layout = QHBoxLayout()
+        layout.setContentsMargins(15, 12, 15, 12)
+
+        icon_label = QLabel("🛑")
+        icon_label.setFont(QFont("Segoe UI Emoji", 16))
+        layout.addWidget(icon_label)
+
+        self._msg = QLabel("KILL SWITCH ACTIVE")
+        layout.addWidget(self._msg)
+
+        self._desc = QLabel(
+            "All ML processing halted • Edit config/kill_switch.yaml to disable"
+        )
+        layout.addWidget(self._desc, 1)
+
+        self._apply_theme()
+        ThemeManager.instance().theme_changed.connect(self._apply_theme)
+
+        self.setLayout(layout)
+        self.hide()  # Hidden by default
+
+    def _apply_theme(self):
         p = _palette()
         self.setStyleSheet(f"""
-            QFrame {{
+            KillSwitchBanner {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
                     stop:0 {p.danger_bg}, stop:1 {p.danger_bg});
                 border: 2px solid {p.danger};
@@ -404,26 +449,11 @@ class KillSwitchBanner(QFrame):
                 margin: 5px 15px;
             }}
         """)
-        
-        layout = QHBoxLayout()
-        layout.setContentsMargins(15, 12, 15, 12)
-        
-        icon_label = QLabel("🛑")
-        icon_label.setFont(QFont("Segoe UI Emoji", 16))
-        layout.addWidget(icon_label)
-        
-        msg = QLabel("KILL SWITCH ACTIVE")
-        msg.setStyleSheet(
-            f"color: {_palette().sev_critical}; font-size: 14px; font-weight: bold;"
-        )
-        layout.addWidget(msg)
-
-        desc = QLabel("All ML processing halted • Edit config/kill_switch.yaml to disable")
-        desc.setStyleSheet(f"color: {_palette().danger}; font-size: 11px;")
-        layout.addWidget(desc, 1)
-        
-        self.setLayout(layout)
-        self.hide()  # Hidden by default
+        if getattr(self, "_msg", None) is not None:
+            self._msg.setStyleSheet(
+                f"color: {p.sev_critical}; font-size: 14px; font-weight: bold;"
+            )
+            self._desc.setStyleSheet(f"color: {p.danger}; font-size: 11px;")
     
     def show_if_active(self, is_active: bool):
         if is_active:

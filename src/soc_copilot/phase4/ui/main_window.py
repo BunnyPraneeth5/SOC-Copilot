@@ -43,6 +43,10 @@ class NavButton(QPushButton):
         self.setCheckable(True)
         self.setFixedHeight(45)
         self._update_style(False)
+        ThemeManager.instance().theme_changed.connect(self._on_theme_change)
+
+    def _on_theme_change(self):
+        self._update_style(self.isChecked())
     
     def _update_style(self, active: bool):
         p = _palette()
@@ -114,12 +118,7 @@ class Sidebar(QFrame):
     
     def _init_ui(self):
         self.setFixedWidth(200)
-        self.setStyleSheet(f"""
-            QFrame {{
-                background-color: {_palette().input_bg};
-                border-right: 1px solid {_palette().surface_alt};
-            }}
-        """)
+        self._apply_theme()
         
         layout = QVBoxLayout()
         layout.setContentsMargins(12, 15, 12, 15)
@@ -128,12 +127,14 @@ class Sidebar(QFrame):
         # Logo/Title
         title = QLabel("🛡️ SOC Copilot")
         title.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
+        self._title_label = title
         title.setStyleSheet(f"color: {_palette().accent}; padding: 10px 0;")
         layout.addWidget(title)
-        
+
         # Beta badge
         beta_badge = QLabel("BETA")
         beta_badge.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        self._beta_badge = beta_badge
         beta_badge.setStyleSheet(f"""
             color: {_palette().text_inverse};
             background-color: {_palette().sev_medium};
@@ -143,11 +144,13 @@ class Sidebar(QFrame):
         beta_badge.setFixedWidth(50)
         beta_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(beta_badge)
-        
+
         # Simple status frame (replacing the counter cards)
         status_frame = QFrame()
+        status_frame.setObjectName("sidebarStatusFrame")
+        self._status_frame = status_frame
         status_frame.setStyleSheet(f"""
-            QFrame {{
+            QFrame#sidebarStatusFrame {{
                 background-color: {_palette().surface};
                 border: 1px solid {_palette().surface_alt};
                 border-radius: 8px;
@@ -173,6 +176,7 @@ class Sidebar(QFrame):
         # Navigation buttons
         layout.addSpacing(15)
         nav_label = QLabel("NAVIGATION")
+        self._nav_label = nav_label
         nav_label.setStyleSheet(
             f"color: {_palette().text_muted}; font-size: 10px; font-weight: bold;"
         )
@@ -201,13 +205,48 @@ class Sidebar(QFrame):
         
         # Version info
         version_label = QLabel("v1.0.0-beta.1")
+        self._version_label = version_label
         version_label.setStyleSheet(
             f"color: {_palette().border}; font-size: 10px;"
         )
         layout.addWidget(version_label)
-        
+
         self.setLayout(layout)
-    
+        ThemeManager.instance().theme_changed.connect(self._apply_theme)
+
+    def _apply_theme(self):
+        """Re-apply palette-derived styles after a theme switch."""
+        p = _palette()
+        self.setStyleSheet(f"""
+            Sidebar {{
+                background-color: {p.input_bg};
+                border-right: 1px solid {p.surface_alt};
+            }}
+        """)
+        if getattr(self, "_title_label", None) is not None:
+            self._title_label.setStyleSheet(
+                f"color: {p.accent}; padding: 10px 0;"
+            )
+            self._beta_badge.setStyleSheet(f"""
+                color: {p.text_inverse};
+                background-color: {p.sev_medium};
+                border-radius: 4px;
+                padding: 2px 8px;
+            """)
+            self._status_frame.setStyleSheet(f"""
+                QFrame#sidebarStatusFrame {{
+                    background-color: {p.surface};
+                    border: 1px solid {p.surface_alt};
+                    border-radius: 8px;
+                }}
+            """)
+            self._nav_label.setStyleSheet(
+                f"color: {p.text_muted}; font-size: 10px; font-weight: bold;"
+            )
+            self._version_label.setStyleSheet(
+                f"color: {p.border}; font-size: 10px;"
+            )
+
     def _on_nav_click(self, index: int):
         for btn in self.nav_buttons:
             btn.setActive(btn.index == index)
@@ -279,6 +318,12 @@ class MainWindow(QMainWindow):
         self.bridge = ControllerBridge(controller)
         self._init_ui()
         self._init_menu()
+        self._set_window_icon()
+        ThemeManager.instance().theme_changed.connect(self._apply_theme)
+
+    def _apply_theme(self):
+        """Re-apply palette-derived styles after a theme switch."""
+        self._style_menubar()
         self._set_window_icon()
     
     def _init_ui(self):
@@ -515,26 +560,8 @@ class MainWindow(QMainWindow):
     def _init_menu(self):
         """Initialize menu bar"""
         menubar = self.menuBar()
-        p = _palette()
-        menubar.setStyleSheet(f"""
-            QMenuBar {{
-                background-color: {p.input_bg};
-                color: {p.text};
-                padding: 2px;
-            }}
-            QMenuBar::item {{ padding: 5px 10px; }}
-            QMenuBar::item:selected {{ background-color: {p.surface_alt}; }}
-            QMenu {{
-                background-color: {p.input_bg};
-                color: {p.text};
-                border: 1px solid {p.surface_alt};
-            }}
-            QMenu::item:selected {{
-                background-color: {p.accent};
-                color: {p.text_inverse};
-            }}
-        """)
-        
+        self._style_menubar()
+
         # File menu
         file_menu = menubar.addMenu("&File")
         
@@ -571,7 +598,29 @@ class MainWindow(QMainWindow):
         about_action = QAction("&About SOC Copilot", self)
         about_action.triggered.connect(self._show_about)
         help_menu.addAction(about_action)
-    
+
+    def _style_menubar(self):
+        """Style the menu bar from the current palette."""
+        p = _palette()
+        self.menuBar().setStyleSheet(f"""
+            QMenuBar {{
+                background-color: {p.input_bg};
+                color: {p.text};
+                padding: 2px;
+            }}
+            QMenuBar::item {{ padding: 5px 10px; }}
+            QMenuBar::item:selected {{ background-color: {p.surface_alt}; }}
+            QMenu {{
+                background-color: {p.input_bg};
+                color: {p.text};
+                border: 1px solid {p.surface_alt};
+            }}
+            QMenu::item:selected {{
+                background-color: {p.accent};
+                color: {p.text_inverse};
+            }}
+        """)
+
     def _set_window_icon(self):
         """Set window icon"""
         icon = QIcon(self._create_icon_pixmap())
