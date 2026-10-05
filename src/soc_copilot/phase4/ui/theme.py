@@ -273,6 +273,14 @@ def build_stylesheet(p: Palette) -> str:
         color: {p.text_muted};
         border: none;
     }}
+    /* Disabled variants must look disabled — [variant] selectors above
+       would otherwise win over the plain :disabled rule. */
+    QPushButton[variant]:disabled {{
+        background-color: {p.surface_alt};
+        color: {p.text_muted};
+        border: 1px solid {p.border};
+        font-weight: normal;
+    }}
 
     /* ----- inputs ----- */
     QLineEdit, QComboBox, QTextEdit, QPlainTextEdit, QSpinBox {{

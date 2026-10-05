@@ -35,6 +35,7 @@ class AlertsView(QWidget):
         self._current_filter = "All"
         self._search_text = ""
         self._dirty = False
+        self.report_drawer = None  # optional; attached by MainWindow
         self._init_ui()
         self.bridge.reportReady.connect(self._on_report_ready)
 
@@ -589,6 +590,8 @@ class AlertsView(QWidget):
         
         try:
             self.bridge.investigate_target(source_ip)
+            if self.report_drawer is not None:
+                self.report_drawer.show_loading(source_ip)
             for row in rows:
                 priority_item = self.table.item(row, self.PRIORITY_COLUMN)
                 priority = priority_item.text() if priority_item else "Low"
@@ -623,18 +626,24 @@ class AlertsView(QWidget):
 
         if error is not None:
             message = getattr(error, "message", str(error))
-            QMessageBox.critical(
-                self,
-                "Investigation Failed",
-                f"Investigation failed for {target}:\n{message}",
-            )
+            if self.report_drawer is not None:
+                self.report_drawer.show_error(target, message)
+            else:
+                QMessageBox.critical(
+                    self,
+                    "Investigation Failed",
+                    f"Investigation failed for {target}:\n{message}",
+                )
             return
 
-        QMessageBox.information(
-            self,
-            f"Threat Report: {target}",
-            self._format_threat_report(report),
-        )
+        if self.report_drawer is not None:
+            self.report_drawer.show_report(report)
+        else:
+            QMessageBox.information(
+                self,
+                f"Threat Report: {target}",
+                self._format_threat_report(report),
+            )
 
     def _format_threat_report(self, report) -> str:
         """Format a ThreatReport defensively for modal display."""

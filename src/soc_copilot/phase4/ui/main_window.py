@@ -25,6 +25,7 @@ from .config_panel import ConfigPanel
 from .about_dialog import AboutDialog
 from .system_status_bar import SystemStatusBar, PermissionBanner, KillSwitchBanner
 from .all_logs_view import AllLogsView
+from .report_drawer import ReportDrawer
 from .theme import ThemeManager
 
 
@@ -399,7 +400,22 @@ class MainWindow(QMainWindow):
         self.config_panel = ConfigPanel(self.bridge)
         self.page_stack.addWidget(self.config_panel)
         
-        content_layout.addWidget(self.page_stack)
+        # Page stack + investigation report drawer in a horizontal splitter
+        self.page_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.page_splitter.addWidget(self.page_stack)
+
+        self.report_drawer = ReportDrawer()
+        self.report_drawer.retry_requested.connect(
+            self.alerts_view._trigger_investigation
+        )
+        self.alerts_view.report_drawer = self.report_drawer
+        self.page_splitter.addWidget(self.report_drawer)
+        self.page_splitter.setCollapsible(1, False)
+        self.page_splitter.setStretchFactor(0, 1)
+        self.page_splitter.setStretchFactor(1, 0)
+        self.page_splitter.setSizes([self.width(), 0])
+
+        content_layout.addWidget(self.page_splitter)
         content_area.setLayout(content_layout)
         
         main_layout.addWidget(content_area)

@@ -372,6 +372,8 @@ class RecentAlertsTimeline(QFrame):
         """Clear all alert items"""
         for item in self._alert_items:
             self.alerts_layout.removeWidget(item)
+            item.hide()
+            item.setParent(None)
             item.deleteLater()
         self._alert_items.clear()
     

@@ -142,7 +142,10 @@ class AlertDetailsPanel(QWidget):
         while self.details_layout.count():
             item = self.details_layout.takeAt(0)
             if item.widget():
-                item.widget().deleteLater()
+                w = item.widget()
+                w.hide()
+                w.setParent(None)
+                w.deleteLater()
     
     def show_alert(
         self,
