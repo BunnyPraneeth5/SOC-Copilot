@@ -26,6 +26,7 @@ from .about_dialog import AboutDialog
 from .system_status_bar import SystemStatusBar, PermissionBanner, KillSwitchBanner
 from .all_logs_view import AllLogsView
 from .report_drawer import ReportDrawer
+from .notifications import AlertNotifier
 from .theme import ThemeManager
 from .motion import fade_in
 
@@ -323,12 +324,36 @@ class MainWindow(QMainWindow):
         self._init_ui()
         self._init_menu()
         self._set_window_icon()
+        self._init_notifications()
         ThemeManager.instance().theme_changed.connect(self._apply_theme)
+
+    def _init_notifications(self):
+        """Tray notifications for new P0/P1 alerts (UX-8)."""
+        self.notifier = AlertNotifier(
+            self.bridge, icon=self.windowIcon(), parent=self
+        )
+        self.notifier.open_alerts_requested.connect(self._open_alerts_from_tray)
+        self.notifier.show_window_requested.connect(self._bring_to_front)
+        self.config_panel.attach_notifier(self.notifier)
+
+    def _bring_to_front(self):
+        if self.isMinimized():
+            self.showNormal()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def _open_alerts_from_tray(self):
+        self._bring_to_front()
+        self._on_nav_changed(1)
 
     def _apply_theme(self):
         """Re-apply palette-derived styles after a theme switch."""
         self._style_menubar()
         self._set_window_icon()
+        notifier = getattr(self, "notifier", None)
+        if notifier is not None:
+            notifier.set_icon(self.windowIcon())
     
     def _fit_to_screen(self, width: int, height: int):
         """Open at the preferred size, clamped to the screen's available area.

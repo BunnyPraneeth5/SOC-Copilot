@@ -10,7 +10,8 @@ from typing import Optional
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
-    QGroupBox, QGridLayout, QPushButton, QComboBox, QCheckBox, QScrollArea
+    QGroupBox, QGridLayout, QPushButton, QComboBox, QCheckBox, QScrollArea,
+    QSystemTrayIcon,
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
@@ -19,6 +20,7 @@ from ..config import ConfigManager
 from ..kill_switch import KillSwitch
 from .theme import ThemeManager, set_role
 from .motion import crossfade_window
+from .notifications import NOTIFY_PRIORITIES
 from .state_constants import (
     get_ingestion_state, get_governance_state,
     INGESTION_STATES, GOVERNANCE_STATES,
@@ -237,6 +239,35 @@ class ConfigPanel(QWidget):
         appearance_group.setLayout(appearance_layout)
         layout.addWidget(appearance_group)
 
+        # Desktop notifications (UX-8) — enabled once MainWindow attaches
+        # its AlertNotifier
+        self.notifier = None
+        notifications_group = QGroupBox("Notifications")
+        self._notifications_group = notifications_group
+        notifications_layout = QHBoxLayout()
+        self.notify_enabled_check = QCheckBox("Desktop notifications for new alerts")
+        self.notify_enabled_check.setToolTip(
+            "Show a system-tray notification when a new alert arrives "
+            "(also available from the tray icon menu)"
+        )
+        self.notify_enabled_check.toggled.connect(self._on_notify_enabled_toggled)
+        notifications_layout.addWidget(self.notify_enabled_check)
+        self.notify_priority_checks = {}
+        for priority in NOTIFY_PRIORITIES:
+            check = QCheckBox(priority)
+            check.toggled.connect(
+                lambda on, p=priority: self._on_notify_priority_toggled(p, on)
+            )
+            notifications_layout.addWidget(check)
+            self.notify_priority_checks[priority] = check
+        notifications_layout.addStretch()
+        self.notify_tray_note = QLabel("")
+        set_role(self.notify_tray_note, "muted")
+        notifications_layout.addWidget(self.notify_tray_note)
+        notifications_group.setLayout(notifications_layout)
+        notifications_group.setEnabled(False)
+        layout.addWidget(notifications_group)
+
         # Restart warning (hidden by default)
         self.restart_warning = QFrame()
         self.restart_warning.setObjectName("restartWarning")
@@ -431,6 +462,39 @@ class ConfigPanel(QWidget):
     def _on_theme_changed(self, index: int):
         crossfade_window(self.window())
         ThemeManager.instance().set_theme("dark" if index == 0 else "light")
+
+    # ----- notifications (UX-8) -----------------------------------------
+
+    def attach_notifier(self, notifier) -> None:
+        """Bind the Notifications controls to MainWindow's AlertNotifier."""
+        self.notifier = notifier
+        notifier.preferences_changed.connect(self._sync_notification_controls)
+        self._notifications_group.setEnabled(True)
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            self.notify_tray_note.setText("System tray not available")
+        self._sync_notification_controls()
+
+    def _sync_notification_controls(self) -> None:
+        n = self.notifier
+        if n is None:
+            return
+        self.notify_enabled_check.blockSignals(True)
+        self.notify_enabled_check.setChecked(not n.muted)
+        self.notify_enabled_check.blockSignals(False)
+        for priority, check in self.notify_priority_checks.items():
+            check.blockSignals(True)
+            check.setChecked(n.priority_enabled(priority))
+            check.setEnabled(not n.muted)
+            check.blockSignals(False)
+
+    def _on_notify_enabled_toggled(self, enabled: bool) -> None:
+        if self.notifier is not None:
+            self.notifier.set_muted(not enabled)
+            self._sync_notification_controls()
+
+    def _on_notify_priority_toggled(self, priority: str, enabled: bool) -> None:
+        if self.notifier is not None:
+            self.notifier.set_priority_enabled(priority, enabled)
 
     def _on_colorblind_toggled(self, checked: bool):
         ThemeManager.instance().set_colorblind(checked)
