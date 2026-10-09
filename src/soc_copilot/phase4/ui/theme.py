@@ -84,22 +84,22 @@ DARK = Palette(
     surface="#16213e",
     surface_alt="#1a2744",
     input_bg="#0f1629",
-    border="#444444",
+    border="#6c6c6c",
     scrollbar="#2a3f5f",
     text="#ffffff",
-    text_muted="#888888",
+    text_muted="#898989",
     text_inverse="#0a0a1a",
     accent="#00d4ff",
     accent_hover="#00a8cc",
-    success="#4CAF50",
+    success="#72c275",
     warning="#FFC107",
-    danger="#f44336",
-    info="#2196F3",
+    danger="#f54c40",
+    info="#39a1f4",
     sev_critical="#ff4444",
     sev_high="#ff8800",
     sev_medium="#ffaa00",
-    sev_low="#757575",
-    sev_info="#888888",
+    sev_low="#9d9d9d",
+    sev_info="#898989",
     danger_bg="#4a0000",
     warning_bg="#2d2d00",
     success_bg="#1a4d26",
@@ -112,21 +112,21 @@ LIGHT = Palette(
     surface="#ffffff",
     surface_alt="#e8eaf2",
     input_bg="#ffffff",
-    border="#c8cdd8",
+    border="#838fa7",
     scrollbar="#b8bfce",
     text="#1a1a2e",
     text_muted="#5a6072",
     text_inverse="#ffffff",
-    accent="#007ea8",
-    accent_hover="#00a8cc",
-    success="#2e7d32",
-    warning="#b26a00",
-    danger="#c62828",
-    info="#1565c0",
-    sev_critical="#c62828",
-    sev_high="#e65100",
-    sev_medium="#b26a00",
-    sev_low="#1565c0",
+    accent="#007aa3",
+    accent_hover="#00809c",
+    success="#2b762f",
+    warning="#9b5c00",
+    danger="#bb2626",
+    info="#1463bb",
+    sev_critical="#bb2626",
+    sev_high="#bd4300",
+    sev_medium="#9b5c00",
+    sev_low="#1463bb",
     sev_info="#5a6072",
     danger_bg="#f8d7d7",
     warning_bg="#f7ecd0",
@@ -141,17 +141,17 @@ _PALETTES = {p.name: p for p in (DARK, LIGHT)}
 # severities are always paired with their text label, never colour alone.
 COLORBLIND_OVERRIDES = {
     "dark": {
-        "sev_critical": "#D55E00",  # vermillion
+        "sev_critical": "#E26400",  # vermillion
         "sev_high": "#E69F00",      # orange
         "sev_medium": "#F0E442",    # yellow
         "sev_low": "#56B4E9",       # sky blue
         "sev_info": "#999999",      # grey
     },
     "light": {
-        "sev_critical": "#B23A00",  # dark vermillion
-        "sev_high": "#A86E00",      # dark orange
-        "sev_medium": "#8A7F00",    # dark yellow
-        "sev_low": "#0072B2",       # blue
+        "sev_critical": "#AF3900",  # dark vermillion
+        "sev_high": "#946100",      # dark orange
+        "sev_medium": "#766C00",    # dark yellow
+        "sev_low": "#0068A3",       # blue
         "sev_info": "#5a6072",      # grey
     },
 }
@@ -437,6 +437,54 @@ def build_stylesheet(p: Palette) -> str:
     QLabel[role="badge"][severity="info"] {{
         background-color: {p.sev_info}; color: {p.text_inverse};
         font-weight: bold; border-radius: 4px; padding: 4px 10px;
+    }}
+    /* ----- keyboard focus + pressed (a11y) ----- */
+    /* Focus borders are 2px; padding shrinks by the extra border width
+       so focused widgets keep their size instead of shifting the layout. */
+    QPushButton:focus {{
+        border: 2px solid {p.accent};
+        padding: 5px 11px;
+    }}
+    QPushButton[variant="primary"]:focus,
+    QPushButton[variant="danger"]:focus {{
+        border: 2px solid {p.text};
+        padding: 4px 10px;
+    }}
+    QPushButton[variant="ghost"]:focus {{
+        padding: 4px 10px;
+    }}
+    QPushButton:pressed {{
+        background-color: {p.surface_alt};
+    }}
+    /* Filled variants keep their inverse text, so they need their own
+       pressed fill — the generic surface_alt would hide the label. */
+    QPushButton[variant="primary"]:pressed {{
+        background-color: {p.accent_hover};
+    }}
+    QPushButton[variant="secondary"]:pressed {{
+        background-color: {p.accent_hover};
+        color: {p.text_inverse};
+    }}
+    QPushButton[variant="danger"]:pressed {{
+        background-color: {p.sev_critical};
+    }}
+    QLineEdit:focus, QComboBox:focus, QTextEdit:focus,
+    QPlainTextEdit:focus, QSpinBox:focus {{
+        border: 2px solid {p.accent};
+        padding: 3px 7px;
+    }}
+    QLineEdit:hover, QComboBox:hover, QTextEdit:hover,
+    QPlainTextEdit:hover, QSpinBox:hover {{
+        border-color: {p.accent};
+    }}
+    QCheckBox:focus, QRadioButton:focus {{
+        color: {p.accent};
+    }}
+    QTabBar::tab:hover {{
+        color: {p.text};
+    }}
+    QTableView::item:hover {{
+        background-color: {p.surface_alt};
     }}
     """
 

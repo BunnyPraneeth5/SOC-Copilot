@@ -40,9 +40,20 @@ class ThreatLevelBanner(QFrame):
 
     def _apply_level_styles(self):
         """Re-apply level-dependent styles (e.g. after a theme switch)."""
+        p = _palette()
         config = self._level_config(self._current_level)
         self._apply_style(self._current_level)
         self.threat_value.setStyleSheet(f"color: {config['fg']};")
+        self.threat_label.setStyleSheet(f"color: {p.text_muted};")
+        self.action_count_label.setStyleSheet(f"color: {p.text};")
+        self.action_text.setStyleSheet(f"color: {p.text};")
+        self.threat_container.setStyleSheet(f"""
+            QFrame#threatPill {{
+                background-color: {p.surface};
+                border-radius: 20px;
+                padding: 5px 15px;
+            }}
+        """)
 
     def _init_ui(self):
         self.setFixedHeight(80)
@@ -55,12 +66,12 @@ class ThreatLevelBanner(QFrame):
         # Left side: Threat level pill
         self.threat_container = QFrame()
         self.threat_container.setObjectName("threatPill")
-        self.threat_container.setStyleSheet("""
-            QFrame#threatPill {
-                background-color: rgba(0, 0, 0, 0.3);
+        self.threat_container.setStyleSheet(f"""
+            QFrame#threatPill {{
+                background-color: {_palette().surface};
                 border-radius: 20px;
                 padding: 5px 15px;
-            }
+            }}
         """)
         threat_layout = QHBoxLayout()
         threat_layout.setContentsMargins(15, 8, 15, 8)
@@ -72,7 +83,6 @@ class ThreatLevelBanner(QFrame):
         
         self.threat_label = QLabel("THREAT LEVEL:")
         self.threat_label.setFont(QFont("Segoe UI", 11))
-        self.threat_label.setStyleSheet("color: rgba(255, 255, 255, 0.8);")
         threat_layout.addWidget(self.threat_label)
         
         self.threat_value = QLabel("CLEAR")
@@ -89,12 +99,10 @@ class ThreatLevelBanner(QFrame):
         
         self.action_count_label = QLabel("0 Alerts")
         self.action_count_label.setFont(QFont("Segoe UI", 24, QFont.Weight.Bold))
-        self.action_count_label.setStyleSheet("color: white;")
         center_layout.addWidget(self.action_count_label)
         
         self.action_text = QLabel("All systems nominal")
         self.action_text.setFont(QFont("Segoe UI", 11))
-        self.action_text.setStyleSheet("color: rgba(255, 255, 255, 0.7);")
         center_layout.addWidget(self.action_text)
         
         layout.addLayout(center_layout, 1)
@@ -102,24 +110,6 @@ class ThreatLevelBanner(QFrame):
         # Right side: View alerts button
         self.view_btn = QPushButton("View Alerts →")
         self.view_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.view_btn.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(255, 255, 255, 0.15);
-                color: white;
-                border: 1px solid rgba(255, 255, 255, 0.3);
-                padding: 12px 24px;
-                border-radius: 8px;
-                font-size: 13px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: rgba(255, 255, 255, 0.25);
-                border-color: rgba(255, 255, 255, 0.5);
-            }
-            QPushButton:pressed {
-                background-color: rgba(255, 255, 255, 0.35);
-            }
-        """)
         self.view_btn.clicked.connect(self.view_alerts_clicked.emit)
         layout.addWidget(self.view_btn)
         
@@ -131,6 +121,8 @@ class ThreatLevelBanner(QFrame):
         shadow.setColor(QColor(0, 0, 0, 100))
         shadow.setOffset(0, 4)
         self.setGraphicsEffect(shadow)
+
+        self._apply_level_styles()
     
     def _apply_style(self, level: str):
         config = self._level_config(level)
