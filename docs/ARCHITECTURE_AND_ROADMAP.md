@@ -203,12 +203,12 @@ The following significant technical debt items have been explicitly addressed an
 
 ### 5a. Open Items / Known Gaps
 
-- **Persistent alert storage:** Alerts live only in the in-memory `ResultStore` (max 1000 entries); no durable alert store exists yet. SQLite is currently used for governance, drift, and feedback data only.
+- **Alert storage limits:** Alerts and triage status persist to `data/alerts/results.db` (newest 1000 results, in-memory fallback if the database is unavailable); older results are pruned.
 - **Claude/Anthropic adapter:** `ReportAgent` supports NVIDIA NIM and OpenRouter; an Anthropic adapter behind the same `ReportLLMAdapter` interface is not implemented.
 - **Two intentionally-separate kill switches:** Phase 3 uses a SQLite-backed governance lock (`phase3/governance/killswitch.py`) while Phase 4 uses a `.kill` sentinel file for the emergency analysis stop (`phase4/kill_switch.py`, also reachable via `soc-copilot killswitch`). They serve different purposes and are deliberately not synchronized.
 - **Explainer is CLI-only:** Phase 2 feedback, drift monitoring, and Phase 3 audit logging are wired into the UI (analyst feedback on alert details, drift indicator + audit persistence via `AppController`); only the explainer remains CLI-only.
 - **UI domain investigations:** The orchestrator supports domains, but the alerts-table double-click only reads the source-IP column.
-- **Mobile companion app:** Shelved — needs the FastAPI layer first; revisit later.
+- **Mobile companion app:** Shelved by product decision — not planned. The FastAPI layer it depended on is deferred with it (see §8).
 
 ---
 
@@ -284,28 +284,30 @@ The MCP integration and its UI binding are now implemented. The following milest
 - **Risks:** Ping checks adding latency to startup; mitigate by running checks lazily on first use and caching aggressively.
 - **Status:** Done — `provider_registry.py` tracks `Configured`/`Available`/`Missing key`/`Offline`/`Disabled` per provider, Settings panel shows provider cards with a "Check connectivity" probe, the orchestrator dispatches agents only when their providers are usable, and `soc-copilot providers [--check]` exposes the same status table on the CLI.
 
-#### Milestone 5b: UI/UX Enhancements
+#### Milestone 5b: UI/UX Enhancements — ✅ Done (09/10/2026)
 
 - **Goal:** Establish a central theme system and progressively improve the desktop UI's usability — theming, responsiveness, investigation ergonomics, alert triage, and platform integration — while staying on PyQt6 widgets with a dark default theme.
 - **Why it matters:** The UI currently has ~170 inline `setStyleSheet()` calls with duplicated hard-coded colours, polling-based refresh, no alert triage workflow, and no notification surface. A single source of truth for colours/fonts/spacing is a prerequisite for a light/dark toggle and every subsequent UX improvement.
 - **Ordering:** Milestone 5b runs before Milestone 6.
 - **Tasks:**
-  - **UX-1:** Central theme system — semantic `Palette` tokens, `ThemeManager` singleton, global QSS, migration of inline styles, hex-literal guard test.
-  - **UX-2:** Light/dark theme toggle (persisted) + colour-blind-safe severity palette.
-  - **UX-3:** Event-driven refresh replacing polling timers.
-  - **UX-4:** Investigation report side drawer — sections, full/partial/local-only badge, copy, Markdown export.
-  - **UX-5:** Alert triage status (New / In progress / Resolved / False positive) linked to feedback, persisted.
-  - **UX-6:** Pagination + CSV/JSON export of filtered alerts.
-  - **UX-7:** Keyboard shortcuts + IP right-click menu.
-  - **UX-8:** Desktop/tray notifications for P0/P1 alerts with mute.
-  - **UX-9:** Header status chips (enrichment, emergency stop, integrity, providers, drift).
-  - **UX-10:** Cleanup — remove unused `dashboard.py`, fix alerts-view cache key collision.
+  - ✅ **UX-1:** Central theme system — semantic `Palette` tokens, `ThemeManager` singleton, global QSS, migration of inline styles, hex-literal guard test.
+  - ✅ **UX-2:** Light/dark theme toggle (persisted) + colour-blind-safe severity palette.
+  - ✅ **UX-3:** Event-driven refresh replacing polling timers.
+  - ✅ **UX-4:** Investigation report side drawer — sections, full/partial/local-only badge, copy, Markdown export.
+  - ✅ **UX-5:** Alert triage status (New / In progress / Resolved / False positive) linked to feedback, persisted.
+  - ✅ **UX-6:** Pagination + CSV/JSON export of filtered alerts.
+  - ✅ **UX-7:** Keyboard shortcuts (Ctrl+1–5, Ctrl+F or `/`, Ctrl+E, F5, F1 help, Esc; J/K, Enter, I, A/R, 1–4 in the alerts table) + IP right-click menus (Investigate / Copy / Filter alerts / Show logs).
+  - ✅ **UX-8:** System-tray notifications for new P0-Critical/P1-High alerts (`notifications.py`): one combined balloon per batch, alerts present at startup never announced, mute + per-priority switches in Settings and the tray menu (persisted); clicking a balloon opens Alerts.
+  - ✅ **UX-9:** Clickable header status chips (`status_chips.py`) — enrichment, kill switch, model integrity, providers (uses the latest connectivity probe when available), drift; clicking opens Settings scrolled to that section.
+  - ✅ **UX-10:** Cleanup — removed unused `dashboard.py`; alerts-table cache keyed by `alert_id` (two same-type alerts in one batch no longer collapse into one row); Investigate column fixed-width; permission banner no longer grows to fill short pages.
+  - Extras shipped alongside: WCAG AA contrast / focus states, page transitions + toasts with a "Reduce motion" setting.
+- **Test-suite stability:** The full suite used to die silently near 89% (exit 127 / `0xC0000409`). Cause: a `QTimer.singleShot` lambda in the report drawer fired after the drawer was destroyed; PyQt6 calls `qFatal()` for any unhandled exception in a Qt callback while the default `sys.excepthook` is installed. Fixed by an owned timer; the app now installs a logging excepthook (`soc_copilot.main.install_excepthook`), and `tests/conftest.py` records such exceptions and fails the test where they surface instead of aborting the run. No split-suite strategy is needed. Rule for new UI code: never schedule a lambda that touches a widget with `QTimer.singleShot` — use a timer parented to the widget or a bound method.
 - **Acceptance criteria:**
-  - All UI colours resolve through theme tokens (no hex literals outside `theme.py`/legacy `dashboard.py`, enforced by a test).
+  - All UI colours resolve through theme tokens (no hex literals outside `theme.py`, enforced by a test).
   - `ThemeManager` can switch palettes at runtime via `set_theme()` and re-apply the global stylesheet.
   - No behavioural regressions: layouts, texts, signal wiring, and the full test suite stay green.
 - **Risks:** Visual drift during migration; mitigated by mapping near-duplicate colours to the closest semantic token and screenshot-diffing key pages offscreen.
-- **Status:** In progress (UX-1, UX-2 done; UX-3..UX-10 pending)
+- **Status:** Done — UX-1..UX-10 complete; full suite green (893 passed, 7 skipped).
 
 #### Milestone 6: Live Workflow Visualization (PyQt6-native)
 
@@ -328,7 +330,7 @@ The MCP integration and its UI binding are now implemented. The following milest
 
 ### 8. Target Architecture (with FastAPI)
 
-Once the MCP pipeline is complete, the application will introduce a FastAPI layer (not started). This shifts the `AppController` behind an HTTP interface, allowing the PyQt6 GUI (or external tools) to communicate via standard REST/JSON, turning SOC Copilot into a true local MCP server.
+**Deferred:** the FastAPI layer was mainly needed for the mobile companion app, which is shelved; it is not scheduled. The design below is kept for reference. Once the MCP pipeline is complete, the application could introduce a FastAPI layer (not started). This shifts the `AppController` behind an HTTP interface, allowing the PyQt6 GUI (or external tools) to communicate via standard REST/JSON, turning SOC Copilot into a true local MCP server.
 
 ```mermaid
 flowchart TD
