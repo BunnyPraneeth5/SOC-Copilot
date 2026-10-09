@@ -10,7 +10,7 @@ Improvements over previous version:
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QSplitter, QTabWidget, QStatusBar, QMenuBar, QMenu,
-    QStackedWidget, QPushButton, QFrame, QLabel
+    QStackedWidget, QPushButton, QFrame, QLabel, QApplication
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QIcon, QPixmap, QPainter, QColor, QPen, QPolygonF, QFont
@@ -27,6 +27,7 @@ from .system_status_bar import SystemStatusBar, PermissionBanner, KillSwitchBann
 from .all_logs_view import AllLogsView
 from .report_drawer import ReportDrawer
 from .theme import ThemeManager
+from .motion import fade_in
 
 
 def _palette():
@@ -54,11 +55,12 @@ class NavButton(QPushButton):
         if active:
             self.setStyleSheet(f"""
                 QPushButton {{
-                    background-color: {p.accent};
-                    color: {p.text_inverse};
+                    background-color: {p.surface_alt};
+                    color: {p.accent};
                     border: none;
+                    border-left: 3px solid {p.accent};
                     border-radius: 8px;
-                    padding: 10px 15px;
+                    padding: 10px 15px 10px 12px;
                     font-size: 13px;
                     font-weight: bold;
                     text-align: left;
@@ -328,10 +330,29 @@ class MainWindow(QMainWindow):
         self._style_menubar()
         self._set_window_icon()
     
+    def _fit_to_screen(self, width: int, height: int):
+        """Open at the preferred size, clamped to the screen's available area.
+
+        On a scaled laptop display (e.g. 1280x720 logical at 150%) the
+        preferred 1500x950 would extend past the screen edges.
+        """
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is None:
+            self.setGeometry(50, 50, width, height)
+            return
+        avail = screen.availableGeometry()
+        w = min(width, avail.width() - 40)
+        h = min(height, avail.height() - 40)
+        self.setGeometry(
+            avail.x() + (avail.width() - w) // 2,
+            avail.y() + (avail.height() - h) // 2,
+            w, h,
+        )
+
     def _init_ui(self):
         self.setWindowTitle("SOC Copilot [BETA] - Real-Time Security Analysis")
-        self.setGeometry(50, 50, 1500, 950)
-        
+        self._fit_to_screen(1500, 950)
+
         # Central widget
         # (base styling comes from the global stylesheet — see theme.py)
         central = QWidget()
@@ -584,7 +605,10 @@ class MainWindow(QMainWindow):
     
     def _on_nav_changed(self, index: int):
         """Handle navigation changes"""
+        changed = self.page_stack.currentIndex() != index
         self.page_stack.setCurrentIndex(index)
+        if changed:
+            fade_in(self.page_stack.currentWidget())
 
         # Update sidebar buttons
         for btn in self.sidebar.nav_buttons:

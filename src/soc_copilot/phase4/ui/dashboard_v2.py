@@ -24,6 +24,7 @@ from .state_constants import (
     PipelineState, IngestionState, GovernanceState
 )
 from .theme import ThemeManager, severity_color, set_role
+from .motion import count_to
 
 
 def _palette():
@@ -281,7 +282,7 @@ class MetricCard(QFrame):
         self.setLayout(layout)
     
     def set_value(self, value: int):
-        self.value_label.setText(str(value))
+        count_to(self.value_label, int(value))
     
     def mousePressEvent(self, event):
         self.clicked.emit(self.title)
