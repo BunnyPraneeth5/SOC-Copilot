@@ -27,6 +27,7 @@ from .system_status_bar import SystemStatusBar, PermissionBanner, KillSwitchBann
 from .all_logs_view import AllLogsView
 from .report_drawer import ReportDrawer
 from .theme import ThemeManager
+from .motion import fade_in
 
 
 def _palette():
@@ -54,11 +55,12 @@ class NavButton(QPushButton):
         if active:
             self.setStyleSheet(f"""
                 QPushButton {{
-                    background-color: {p.accent};
-                    color: {p.text_inverse};
+                    background-color: {p.surface_alt};
+                    color: {p.accent};
                     border: none;
+                    border-left: 3px solid {p.accent};
                     border-radius: 8px;
-                    padding: 10px 15px;
+                    padding: 10px 15px 10px 12px;
                     font-size: 13px;
                     font-weight: bold;
                     text-align: left;
@@ -603,7 +605,10 @@ class MainWindow(QMainWindow):
     
     def _on_nav_changed(self, index: int):
         """Handle navigation changes"""
+        changed = self.page_stack.currentIndex() != index
         self.page_stack.setCurrentIndex(index)
+        if changed:
+            fade_in(self.page_stack.currentWidget())
 
         # Update sidebar buttons
         for btn in self.sidebar.nav_buttons:

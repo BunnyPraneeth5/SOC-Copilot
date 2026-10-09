@@ -11,6 +11,7 @@ from PyQt6.QtGui import QFont, QColor
 from datetime import datetime
 
 from .theme import ThemeManager, severity_color, set_role
+from .motion import show_toast
 from ..controller.result_store import TRIAGE_STATUSES
 
 
@@ -545,6 +546,11 @@ class AlertsView(QWidget):
                     f"Exported {len(self._filtered_cache)} alerts to {path}",
                     5000,
                 )
+            show_toast(
+                self,
+                f"Exported {len(self._filtered_cache)} alerts",
+                "success",
+            )
         except Exception as exc:
             QMessageBox.critical(
                 self, "Export failed", f"Could not export alerts:\n{exc}"
@@ -901,10 +907,12 @@ class AlertsView(QWidget):
         QApplication.clipboard().setText(text)
         self._status_msg(f"Copied {text}")
 
-    def _status_msg(self, msg: str):
+    def _status_msg(self, msg: str, kind: str = "info"):
         window = self.window()
         if hasattr(window, "statusBar"):
             window.statusBar().showMessage(msg, 3000)
+        if window is not self:
+            show_toast(self, msg, kind)
 
     def _build_row_context_menu(self, row: int):
         """Row context menu; new actions get appended here."""
@@ -1023,7 +1031,9 @@ class AlertsView(QWidget):
         status = self._STATUS_KEYS.get(key)
         if status is not None:
             self._set_row_status(row, status)
-            self._status_msg(f"Marked {alert['alert_id']} as {status}")
+            self._status_msg(
+                f"Marked {alert['alert_id']} as {status}", "success"
+            )
             return True
         return False
 
@@ -1037,9 +1047,11 @@ class AlertsView(QWidget):
         """Submit accept/reject feedback for the row's alert (UX-5 link)."""
         try:
             self.bridge.submit_feedback(alert["alert_id"], action)
-            self._status_msg(f"Feedback '{action}' for {alert['alert_id']}")
+            self._status_msg(
+                f"Feedback '{action}' for {alert['alert_id']}", "success"
+            )
         except Exception as exc:
-            self._status_msg(f"Feedback failed: {exc}")
+            self._status_msg(f"Feedback failed: {exc}", "error")
 
     def _find_rows_by_ip(self, ip: str) -> list[int]:
         """Scan the table to find all row indices matching the given IP address."""

@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
 
 from .report_format import report_mode, report_to_markdown
 from .theme import FONT_MD, ThemeManager, severity_color
+from .motion import show_toast, slide_open_width
 
 
 def _palette():
@@ -209,8 +210,7 @@ class ReportDrawer(QFrame):
         self._loading_label.setStyleSheet(f"color: {p.text_muted};")
         self.stack.setCurrentIndex(0)
         self._footer.setVisible(False)
-        self.show()
-        self.raise_()
+        self._reveal()
 
     def show_report(self, report):
         self._current_report = report
@@ -219,8 +219,7 @@ class ReportDrawer(QFrame):
         self._push_history(report)
         self.stack.setCurrentIndex(1)
         self._footer.setVisible(True)
-        self.show()
-        self.raise_()
+        self._reveal()
 
     def show_error(self, target: str, message: str):
         self._current_target = target
@@ -231,8 +230,15 @@ class ReportDrawer(QFrame):
         self._footer.setVisible(True)
         self.copy_btn.setEnabled(False)
         self.export_btn.setEnabled(False)
+        self._reveal()
+
+    def _reveal(self):
+        """Show the drawer, sliding it in if it was closed."""
+        was_hidden = not self.isVisible()
         self.show()
         self.raise_()
+        if was_hidden:
+            slide_open_width(self, 440)
 
     def close_drawer(self):
         self.hide()
@@ -437,6 +443,7 @@ class ReportDrawer(QFrame):
             return
         QApplication.clipboard().setText(report_to_markdown(self._current_report))
         self.copy_btn.setText("Copied")
+        show_toast(self, "Report copied as Markdown", "success")
         QTimer.singleShot(1500, lambda: self.copy_btn.setText("Copy"))
 
     def _export_markdown(self):

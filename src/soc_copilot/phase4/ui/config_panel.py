@@ -18,6 +18,7 @@ from PyQt6.QtGui import QFont
 from ..config import ConfigManager
 from ..kill_switch import KillSwitch
 from .theme import ThemeManager, set_role
+from .motion import crossfade_window
 from .state_constants import (
     get_ingestion_state, get_governance_state,
     INGESTION_STATES, GOVERNANCE_STATES,
@@ -222,6 +223,16 @@ class ConfigPanel(QWidget):
         self.colorblind_check.toggled.connect(self._on_colorblind_toggled)
         appearance_layout.addWidget(self.colorblind_check)
 
+        self.reduce_motion_check = QCheckBox("Reduce motion")
+        self.reduce_motion_check.setToolTip(
+            "Turn off page fades, sliding panels and animated counters"
+        )
+        self.reduce_motion_check.setChecked(tm.reduce_motion)
+        self.reduce_motion_check.toggled.connect(
+            ThemeManager.instance().set_reduce_motion
+        )
+        appearance_layout.addWidget(self.reduce_motion_check)
+
         appearance_layout.addStretch()
         appearance_group.setLayout(appearance_layout)
         layout.addWidget(appearance_group)
@@ -418,6 +429,7 @@ class ConfigPanel(QWidget):
         self._refresh_status()
 
     def _on_theme_changed(self, index: int):
+        crossfade_window(self.window())
         ThemeManager.instance().set_theme("dark" if index == 0 else "light")
 
     def _on_colorblind_toggled(self, checked: bool):

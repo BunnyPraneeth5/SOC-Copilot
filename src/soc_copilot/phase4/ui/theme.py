@@ -158,6 +158,7 @@ COLORBLIND_OVERRIDES = {
 
 _SETTINGS_KEY_THEME = "appearance/theme"
 _SETTINGS_KEY_COLORBLIND = "appearance/colorblind"
+_SETTINGS_KEY_REDUCE_MOTION = "appearance/reduce_motion"
 _ENV_THEME = "SOC_COPILOT_THEME"
 
 
@@ -486,6 +487,20 @@ def build_stylesheet(p: Palette) -> str:
     QTableView::item:hover {{
         background-color: {p.surface_alt};
     }}
+
+    /* ----- toast notifications (motion.show_toast) ----- */
+    QLabel#toast {{
+        background-color: {p.surface_alt};
+        color: {p.text};
+        border: 1px solid {p.border};
+        border-left: 4px solid {p.info};
+        border-radius: {RADIUS};
+        padding: 10px 14px;
+        font-size: 12px;
+    }}
+    QLabel#toast[role="toastSuccess"] {{ border-left-color: {p.success}; }}
+    QLabel#toast[role="toastWarning"] {{ border-left-color: {p.warning}; }}
+    QLabel#toast[role="toastError"] {{ border-left-color: {p.danger}; }}
     """
 
 
@@ -553,6 +568,7 @@ class ThemeManager(QObject):
         super().__init__()
         self._base_name = "dark"
         self._colorblind = False
+        self._reduce_motion = False
         self._palette = DARK
         self._settings: QSettings | None = None
 
@@ -584,6 +600,10 @@ class ThemeManager(QObject):
     @property
     def colorblind(self) -> bool:
         return self._colorblind
+
+    @property
+    def reduce_motion(self) -> bool:
+        return self._reduce_motion
 
     # ----- effective palette ------------------------------------------------
 
@@ -628,6 +648,11 @@ class ThemeManager(QObject):
         self._refresh()
         self.save_preferences()
 
+    def set_reduce_motion(self, enabled: bool) -> None:
+        """Turn UI transitions off (accessibility). No restyle needed."""
+        self._reduce_motion = bool(enabled)
+        self.save_preferences()
+
     # ----- persistence ---------------------------------------------------------
 
     def _settings_or_default(self, settings: QSettings | None) -> QSettings:
@@ -655,6 +680,8 @@ class ThemeManager(QObject):
             self._base_name = env if env in _PALETTES else "dark"
         cb = s.value(_SETTINGS_KEY_COLORBLIND, False)
         self._colorblind = str(cb).lower() in ("true", "1", "yes", "on")
+        rm = s.value(_SETTINGS_KEY_REDUCE_MOTION, False)
+        self._reduce_motion = str(rm).lower() in ("true", "1", "yes", "on")
         self._refresh()
 
     def save_preferences(self, settings: QSettings | None = None) -> None:
@@ -662,6 +689,7 @@ class ThemeManager(QObject):
         s = self._settings_or_default(settings)
         s.setValue(_SETTINGS_KEY_THEME, self._base_name)
         s.setValue(_SETTINGS_KEY_COLORBLIND, self._colorblind)
+        s.setValue(_SETTINGS_KEY_REDUCE_MOTION, self._reduce_motion)
 
     def apply(self, app) -> None:
         """Apply the current palette's global stylesheet to an app."""
