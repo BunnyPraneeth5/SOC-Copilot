@@ -141,7 +141,7 @@ class SystemStatusBar(QFrame):
         
         layout = QHBoxLayout()
         layout.setContentsMargins(15, 0, 15, 0)
-        layout.setSpacing(25)
+        layout.setSpacing(14)
         
         # Pipeline indicator (combines old Pipeline LED)
         self.pipeline_led = StatusIndicator("Pipeline")

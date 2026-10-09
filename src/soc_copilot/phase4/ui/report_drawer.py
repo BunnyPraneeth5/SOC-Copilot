@@ -38,7 +38,7 @@ class ReportDrawer(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("reportDrawer")
-        self.setMinimumWidth(380)
+        self.setMinimumWidth(320)
         self.setMaximumWidth(560)
         self._current_report = None
         self._current_target = ""

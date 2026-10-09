@@ -10,7 +10,7 @@ from typing import Optional
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
-    QGroupBox, QGridLayout, QPushButton, QComboBox, QCheckBox
+    QGroupBox, QGridLayout, QPushButton, QComboBox, QCheckBox, QScrollArea
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
@@ -359,7 +359,19 @@ class ConfigPanel(QWidget):
         layout.addWidget(info_label)
 
         layout.addStretch()
-        self.setLayout(layout)
+
+        # Scroll the settings so their height doesn't set the window's
+        # minimum height (the page stack sizes to its tallest page).
+        content = QWidget()
+        content.setLayout(layout)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(content)
+        outer = QVBoxLayout()
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(scroll)
+        self.setLayout(outer)
         ThemeManager.instance().theme_changed.connect(self._apply_theme)
 
     def _style_check_button(self):

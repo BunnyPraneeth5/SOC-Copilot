@@ -142,7 +142,17 @@ class AlertsView(QWidget):
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
         self.table.setSortingEnabled(False)  # Disable during updates
-        self.table.horizontalHeader().setStretchLastSection(True)
+        # Classification absorbs spare width; the Action column stays
+        # button-sized instead of stretching across wide windows.
+        header = self.table.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(
+            self.CLASSIFICATION_COLUMN, QHeaderView.ResizeMode.Stretch
+        )
+        header.setSectionResizeMode(
+            self.ACTION_COLUMN, QHeaderView.ResizeMode.Fixed
+        )
+        self.table.setColumnWidth(self.ACTION_COLUMN, 130)
         self.table.verticalHeader().setDefaultSectionSize(32)  # Compact rows
         self.table.itemClicked.connect(self._on_row_clicked)
         self.table.itemDoubleClicked.connect(self._on_row_double_clicked)
@@ -235,7 +245,7 @@ class AlertsView(QWidget):
                 border: 1px solid {p.scrollbar};
                 border-radius: 4px;
                 padding: 5px 10px;
-                min-width: 100px;
+                min-width: 70px;
             }}
             QComboBox::drop-down {{ border: none; }}
             QComboBox QAbstractItemView {{
@@ -255,7 +265,7 @@ class AlertsView(QWidget):
                 border: 1px solid {p.scrollbar};
                 border-radius: 4px;
                 padding: 5px 10px;
-                min-width: 150px;
+                min-width: 110px;
             }}
         """
 
@@ -286,7 +296,9 @@ class AlertsView(QWidget):
         self.counter_label.setStyleSheet(
             f"color: {_palette().text_muted}; font-size: 11px;"
         )
-        
+        # Wrap on narrow windows instead of forcing the header wider
+        self.counter_label.setWordWrap(True)
+
         title_layout.addWidget(title)
         title_layout.addWidget(self.counter_label)
         header.addLayout(title_layout)

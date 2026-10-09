@@ -10,7 +10,7 @@ Improvements over previous version:
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QSplitter, QTabWidget, QStatusBar, QMenuBar, QMenu,
-    QStackedWidget, QPushButton, QFrame, QLabel
+    QStackedWidget, QPushButton, QFrame, QLabel, QApplication
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QIcon, QPixmap, QPainter, QColor, QPen, QPolygonF, QFont
@@ -328,10 +328,29 @@ class MainWindow(QMainWindow):
         self._style_menubar()
         self._set_window_icon()
     
+    def _fit_to_screen(self, width: int, height: int):
+        """Open at the preferred size, clamped to the screen's available area.
+
+        On a scaled laptop display (e.g. 1280x720 logical at 150%) the
+        preferred 1500x950 would extend past the screen edges.
+        """
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is None:
+            self.setGeometry(50, 50, width, height)
+            return
+        avail = screen.availableGeometry()
+        w = min(width, avail.width() - 40)
+        h = min(height, avail.height() - 40)
+        self.setGeometry(
+            avail.x() + (avail.width() - w) // 2,
+            avail.y() + (avail.height() - h) // 2,
+            w, h,
+        )
+
     def _init_ui(self):
         self.setWindowTitle("SOC Copilot [BETA] - Real-Time Security Analysis")
-        self.setGeometry(50, 50, 1500, 950)
-        
+        self._fit_to_screen(1500, 950)
+
         # Central widget
         # (base styling comes from the global stylesheet — see theme.py)
         central = QWidget()
