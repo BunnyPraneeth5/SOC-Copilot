@@ -167,12 +167,23 @@ _ENV_THEME = "SOC_COPILOT_THEME"
 # ---------------------------------------------------------------------------
 
 FONT_FAMILY = "Segoe UI"
+FONT_MONO = "Cascadia Mono"  # falls back to Consolas (see stylesheet)
 FONT_SM = "10px"
 FONT_MD = "12px"
 FONT_LG = "13px"
 FONT_XL = "16px"
 RADIUS = "6px"
 SPACING = 10
+
+# Type scale (px) — page title / section title / body / caption
+TYPE_PAGE_TITLE = "20px"
+TYPE_SECTION = "14px"
+TYPE_BODY = "13px"
+TYPE_CAPTION = "11px"
+
+# Layout rhythm: every page uses the same outer margin and gaps
+PAGE_MARGIN = 24
+PAGE_SPACING = 16
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +224,54 @@ def build_stylesheet(p: Palette) -> str:
         color: {p.accent};
         font-size: {FONT_XL};
         font-weight: bold;
+    }}
+    /* ----- type scale ----- */
+    QLabel[role="pageTitle"] {{
+        color: {p.text};
+        font-size: {TYPE_PAGE_TITLE};
+        font-weight: 600;
+    }}
+    QLabel[role="pageSubtitle"] {{
+        color: {p.text_muted};
+        font-size: {FONT_MD};
+    }}
+    QLabel[role="sectionTitle"] {{
+        color: {p.text};
+        font-size: {TYPE_SECTION};
+        font-weight: 600;
+    }}
+    QLabel[role="caption"] {{
+        color: {p.text_muted};
+        font-size: {TYPE_CAPTION};
+        font-weight: 600;
+    }}
+    QLabel[role="body"] {{
+        color: {p.text};
+        font-size: {TYPE_BODY};
+    }}
+    QLabel[role="mono"] {{
+        font-family: "{FONT_MONO}", "Consolas", monospace;
+        color: {p.text};
+    }}
+    QLabel[role="pill"] {{
+        color: {p.text_muted};
+        border: 1px solid {p.border};
+        border-radius: 8px;
+        padding: 0px 7px;
+        font-size: 10px;
+        font-weight: 600;
+    }}
+    QLabel[role="navBadge"] {{
+        background-color: {p.surface_alt};
+        color: {p.text};
+        border-radius: 9px;
+        padding: 1px 7px;
+        font-size: {TYPE_CAPTION};
+        font-weight: 600;
+    }}
+    QLabel[role="navBadge"][tone="critical"] {{
+        background-color: {p.sev_critical};
+        color: {p.text_inverse};
     }}
     QToolTip {{
         background-color: {p.surface};
@@ -300,6 +359,13 @@ def build_stylesheet(p: Palette) -> str:
         border-radius: {RADIUS};
         padding: 4px 8px;
         selection-background-color: {p.accent};
+    }}
+    QComboBox {{
+        min-width: 70px;
+    }}
+    QComboBox::drop-down {{
+        border: none;
+        width: 22px;
     }}
     QComboBox QAbstractItemView {{
         background-color: {p.surface};
@@ -395,6 +461,60 @@ def build_stylesheet(p: Palette) -> str:
         padding: 6px;
         font-weight: bold;
     }}
+    /* Data tables (components.style_table): row dividers instead of a
+       grid, muted left-aligned column headers. */
+    QTableWidget[role="data"] {{
+        background-color: {p.input_bg};
+        alternate-background-color: {p.input_bg};
+        border: 1px solid {p.surface_alt};
+        border-radius: {RADIUS};
+        gridline-color: transparent;
+    }}
+    QTableWidget[role="data"]::item {{
+        border-bottom: 1px solid {p.surface_alt};
+        padding: 0px 10px;
+    }}
+    QTableWidget[role="data"]::item:selected {{
+        background-color: {p.surface_alt};
+        color: {p.text};
+    }}
+    QTableWidget[role="data"] QHeaderView::section {{
+        background-color: {p.input_bg};
+        color: {p.text_muted};
+        border: none;
+        border-bottom: 1px solid {p.surface_alt};
+        padding: 8px 10px;
+        font-size: {TYPE_CAPTION};
+        font-weight: 600;
+    }}
+    QPushButton[variant="tableAction"] {{
+        background-color: transparent;
+        color: {p.accent};
+        border: 1px solid {p.border};
+        border-radius: 4px;
+        padding: 2px 10px;
+        margin: 4px 8px;
+        font-size: {FONT_MD};
+    }}
+    QPushButton[variant="tableAction"]:hover {{
+        border-color: {p.accent};
+        background-color: {p.surface_alt};
+    }}
+    QPushButton[variant="tableAction"]:disabled {{
+        color: {p.text_muted};
+        border-color: {p.surface_alt};
+        background-color: transparent;
+    }}
+    QPushButton[variant="icon"] {{
+        background-color: transparent;
+        border: 1px solid {p.border};
+        border-radius: {RADIUS};
+        padding: 5px;
+    }}
+    QPushButton[variant="icon"]:hover {{
+        border-color: {p.accent};
+        background-color: {p.surface_alt};
+    }}
 
     /* ----- scrollbars ----- */
     QScrollBar:vertical {{
@@ -462,6 +582,12 @@ def build_stylesheet(p: Palette) -> str:
     }}
     QPushButton[variant="ghost"]:focus {{
         padding: 4px 10px;
+    }}
+    QPushButton[variant="icon"]:focus {{
+        padding: 4px;
+    }}
+    QPushButton[variant="tableAction"]:focus {{
+        padding: 1px 9px;
     }}
     QPushButton:pressed {{
         background-color: {p.surface_alt};

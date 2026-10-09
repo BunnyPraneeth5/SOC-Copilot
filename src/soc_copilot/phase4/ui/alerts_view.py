@@ -10,8 +10,13 @@ from PyQt6.QtGui import QFont, QColor
 
 from datetime import datetime
 
-from .theme import ThemeManager, severity_color, set_role
+from .theme import ThemeManager, set_role, PAGE_MARGIN, PAGE_SPACING
 from .motion import show_toast
+from .components import (
+    PageHeader, icon_button, text_button, style_table,
+    severity_delegate, status_delegate,
+)
+from .icons import set_icon
 from ..controller.result_store import TRIAGE_STATUSES
 
 
@@ -21,10 +26,10 @@ def _palette():
 
 class AlertsView(QWidget):
     """Scalable alerts table with filtering and incremental updates"""
-    
+
     alert_selected = pyqtSignal(str, str)  # batch_id, alert_id
     show_logs_requested = pyqtSignal(str)  # IP to look up in All Logs
-    
+
     # Column configuration constants
     TIME_COLUMN = 0
     PRIORITY_COLUMN = 1
@@ -34,7 +39,7 @@ class AlertsView(QWidget):
     CONFIDENCE_COLUMN = 5
     BATCH_ID_COLUMN = 6
     ACTION_COLUMN = 7
-    
+
     def __init__(self, bridge):
         super().__init__()
         self.bridge = bridge
@@ -126,16 +131,16 @@ class AlertsView(QWidget):
         if self._dirty:
             self._dirty = False
             self.refresh()
-    
+
     def _init_ui(self):
         layout = QVBoxLayout()
-        layout.setContentsMargins(15, 15, 15, 15)
-        layout.setSpacing(10)
-        
-        # Header with counters and filters
+        layout.setContentsMargins(PAGE_MARGIN, PAGE_MARGIN, PAGE_MARGIN, PAGE_MARGIN)
+        layout.setSpacing(PAGE_SPACING)
+
+        # Page header + filter toolbar
         header = self._create_header()
         layout.addLayout(header)
-        
+
         # Table
         self.table = QTableWidget()
         self.table.setColumnCount(8)
@@ -149,11 +154,18 @@ class AlertsView(QWidget):
         self.table.customContextMenuRequested.connect(
             self._on_table_context_menu
         )
-        
+
         # Optimize table for performance
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.table.setAlternatingRowColors(True)
+        style_table(self.table, row_height=40)
+        # Priority and status render as badges; text stays the same
+        self.table.setItemDelegateForColumn(
+            self.PRIORITY_COLUMN, severity_delegate(self.table)
+        )
+        self.table.setItemDelegateForColumn(
+            self.STATUS_COLUMN, status_delegate(self.table)
+        )
         self.table.setSortingEnabled(False)  # Disable during updates
         # Classification absorbs spare width; the Action column stays
         # button-sized instead of stretching across wide windows.
@@ -166,60 +178,55 @@ class AlertsView(QWidget):
             self.ACTION_COLUMN, QHeaderView.ResizeMode.Fixed
         )
         self.table.setColumnWidth(self.ACTION_COLUMN, 130)
-        self.table.verticalHeader().setDefaultSectionSize(32)  # Compact rows
         self.table.itemClicked.connect(self._on_row_clicked)
         self.table.itemDoubleClicked.connect(self._on_row_double_clicked)
         self.table.installEventFilter(self)  # UX-7 vim-style keys
-        
+
         # Performance: disable updates during batch operations
         self.table.setUpdatesEnabled(True)
-        
+
         layout.addWidget(self.table)
 
         # Pagination bar (UX-6)
         pager = QHBoxLayout()
         pager.setContentsMargins(0, 0, 0, 0)
 
-        page_size_label = QLabel("Rows:")
-        page_size_label.setStyleSheet(
-            f"color: {_palette().text_muted}; font-size: 12px;"
-        )
+        page_size_label = QLabel("Rows per page")
+        set_role(page_size_label, "pageSubtitle")
         self._page_size_label = page_size_label
         pager.addWidget(page_size_label)
 
         self.page_size_combo = QComboBox()
         self.page_size_combo.addItems(["50", "100", "200"])
         self.page_size_combo.setCurrentText("100")
-        self.page_size_combo.setStyleSheet(self._combo_style(_palette()))
         self.page_size_combo.currentTextChanged.connect(
             self._on_page_size_changed
         )
         pager.addWidget(self.page_size_combo)
+        pager.addStretch()
 
-        self.prev_btn = QPushButton("◀ Prev")
+        self.page_label = QLabel("Page 1 of 1")
+        set_role(self.page_label, "pageSubtitle")
+        pager.addWidget(self.page_label)
+
+        self.prev_btn = text_button("Previous", "chevron-left")
         self.prev_btn.clicked.connect(self._on_prev_page)
         pager.addWidget(self.prev_btn)
 
-        self.next_btn = QPushButton("Next ▶")
+        self.next_btn = text_button("Next", "chevron-right")
+        self.next_btn.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.next_btn.clicked.connect(self._on_next_page)
         pager.addWidget(self.next_btn)
 
-        self.page_label = QLabel("Page 1 of 1")
-        self.page_label.setStyleSheet(
-            f"color: {_palette().text_muted}; font-size: 12px;"
-        )
-        pager.addWidget(self.page_label)
-
-        pager.addStretch()
         layout.addLayout(pager)
 
         # Empty state label
         self.empty_label = QLabel("")
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.empty_label.setStyleSheet(
-            f"color: {_palette().text_muted}; font-style: italic; padding: 20px;"
+            f"color: {_palette().text_muted}; padding: 40px; font-size: 13px;"
         )
-        self.empty_label.setFont(QFont("Segoe UI", 12))
+        self.empty_label.setWordWrap(True)
         layout.addWidget(self.empty_label)
 
         self.setLayout(layout)
@@ -229,153 +236,73 @@ class AlertsView(QWidget):
         """Re-apply palette-derived styles after a theme switch."""
         p = _palette()
         self.empty_label.setStyleSheet(
-            f"color: {p.text_muted}; font-style: italic; padding: 20px;"
+            f"color: {p.text_muted}; padding: 40px; font-size: 13px;"
         )
-        if getattr(self, "counter_label", None) is not None:
-            self.counter_label.setStyleSheet(
-                f"color: {p.text_muted}; font-size: 11px;"
-            )
-            self._filter_label.setStyleSheet(
-                f"color: {p.text_muted}; font-size: 12px;"
-            )
-            self.priority_filter.setStyleSheet(self._combo_style(p))
-            self.status_filter.setStyleSheet(self._combo_style(p))
-            self.page_size_combo.setStyleSheet(self._combo_style(p))
-            self.search_box.setStyleSheet(self._search_style(p))
-            self._refresh_btn.setStyleSheet(self._refresh_style(p))
-            muted = f"color: {p.text_muted}; font-size: 12px;"
-            self.page_label.setStyleSheet(muted)
-            self._page_size_label.setStyleSheet(muted)
-            self._status_filter_label.setStyleSheet(muted)
         self._reapply_in_flight_row_state()
 
-    @staticmethod
-    def _combo_style(p) -> str:
-        return f"""
-            QComboBox {{
-                background-color: {p.surface_alt};
-                color: {p.text};
-                border: 1px solid {p.scrollbar};
-                border-radius: 4px;
-                padding: 5px 10px;
-                min-width: 70px;
-            }}
-            QComboBox::drop-down {{ border: none; }}
-            QComboBox QAbstractItemView {{
-                background-color: {p.surface_alt};
-                color: {p.text};
-                selection-background-color: {p.accent};
-                selection-color: {p.text_inverse};
-            }}
-        """
+    def _create_header(self) -> QVBoxLayout:
+        """Page header (title, live counts, actions) + filter toolbar."""
+        box = QVBoxLayout()
+        box.setSpacing(PAGE_SPACING)
 
-    @staticmethod
-    def _search_style(p) -> str:
-        return f"""
-            QLineEdit {{
-                background-color: {p.surface_alt};
-                color: {p.text};
-                border: 1px solid {p.scrollbar};
-                border-radius: 4px;
-                padding: 5px 10px;
-                min-width: 110px;
-            }}
-        """
+        self.header = PageHeader("Alerts", "bell", "Loading...")
+        self.counter_label = self.header.subtitle_label
 
-    @staticmethod
-    def _refresh_style(p) -> str:
-        return f"""
-            QPushButton {{
-                background-color: {p.surface_alt};
-                color: {p.text};
-                border: 1px solid {p.scrollbar};
-                border-radius: 4px;
-                padding: 5px 10px;
-                font-size: 14px;
-            }}
-            QPushButton:hover {{ background-color: {p.scrollbar}; }}
-        """
-    
-    def _create_header(self) -> QHBoxLayout:
-        """Create header with counters and filters"""
-        header = QHBoxLayout()
-        
-        # Title with live counter
-        title_layout = QVBoxLayout()
-        title = QLabel("🚨 Alerts")
-        title.setFont(QFont("Segoe UI", 16, QFont.Weight.Bold))
+        refresh_btn = icon_button("refresh", "Refresh alerts (F5)")
+        self._refresh_btn = refresh_btn
+        refresh_btn.clicked.connect(self.refresh)
+        self.header.add_action(refresh_btn)
 
-        self.counter_label = QLabel("Loading...")
-        self.counter_label.setStyleSheet(
-            f"color: {_palette().text_muted}; font-size: 11px;"
+        export_btn = text_button("Export", "download", "secondary", "accent")
+        self._export_btn = export_btn
+        export_btn.setToolTip("Export filtered alerts as CSV or JSON (Ctrl+E)")
+        export_btn.clicked.connect(self._on_export)
+        self.header.add_action(export_btn)
+        box.addWidget(self.header)
+
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(8)
+
+        self.search_box = QLineEdit()
+        self.search_box.setPlaceholderText("Search classification, IP or batch")
+        self.search_box.setToolTip("Search alerts (Ctrl+F or /)")
+        self.search_box.setClearButtonEnabled(True)
+        self.search_box.addAction(
+            self._search_icon(), QLineEdit.ActionPosition.LeadingPosition
         )
-        # Wrap on narrow windows instead of forcing the header wider
-        self.counter_label.setWordWrap(True)
+        self.search_box.setMinimumWidth(220)
+        self.search_box.textChanged.connect(self._on_search_changed)
+        toolbar.addWidget(self.search_box, 1)
 
-        title_layout.addWidget(title)
-        title_layout.addWidget(self.counter_label)
-        header.addLayout(title_layout)
-        
-        header.addStretch()
-        
-        # Priority filter
-        self._filter_label = QLabel("Filter:")
-        self._filter_label.setStyleSheet(
-            f"color: {_palette().text_muted}; font-size: 12px;"
-        )
-        header.addWidget(self._filter_label)
-
+        self._filter_label = QLabel("Priority")
+        set_role(self._filter_label, "pageSubtitle")
+        toolbar.addWidget(self._filter_label)
         self.priority_filter = QComboBox()
         self.priority_filter.addItems(["All", "Critical", "High", "Medium", "Low"])
-        p = _palette()
-        self.priority_filter.setStyleSheet(self._combo_style(p))
         self.priority_filter.currentTextChanged.connect(self._on_filter_changed)
-        header.addWidget(self.priority_filter)
+        toolbar.addWidget(self.priority_filter)
 
-        # Triage status filter
-        status_label = QLabel("Status:")
-        status_label.setStyleSheet(
-            f"color: {_palette().text_muted}; font-size: 12px;"
-        )
+        status_label = QLabel("Status")
+        set_role(status_label, "pageSubtitle")
         self._status_filter_label = status_label
-        header.addWidget(status_label)
+        toolbar.addWidget(status_label)
         self.status_filter = QComboBox()
         self.status_filter.addItems(
             ["All", "Open", "New", "In progress", "Resolved",
              "False positive"]
         )
-        self.status_filter.setStyleSheet(self._combo_style(p))
         self.status_filter.currentTextChanged.connect(
             self._on_status_filter_changed
         )
-        header.addWidget(self.status_filter)
+        toolbar.addWidget(self.status_filter)
+        box.addLayout(toolbar)
+        return box
 
-        # Search box
-        self.search_box = QLineEdit()
-        self.search_box.setPlaceholderText("Search...")
-        self.search_box.setToolTip("Search alerts (Ctrl+F or /)")
-        self.search_box.setStyleSheet(self._search_style(p))
-        self.search_box.textChanged.connect(self._on_search_changed)
-        header.addWidget(self.search_box)
+    @staticmethod
+    def _search_icon():
+        from .icons import icon
+        return icon("search", "text_muted", 16)
 
-        # Refresh button
-        refresh_btn = QPushButton("🔄")
-        self._refresh_btn = refresh_btn
-        refresh_btn.setToolTip("Refresh alerts")
-        refresh_btn.setStyleSheet(self._refresh_style(p))
-        refresh_btn.clicked.connect(self.refresh)
-        header.addWidget(refresh_btn)
-
-        # Export button (UX-6)
-        export_btn = QPushButton("Export…")
-        self._export_btn = export_btn
-        set_role(export_btn, "secondary")
-        export_btn.setToolTip("Export filtered alerts as CSV or JSON (Ctrl+E)")
-        export_btn.clicked.connect(self._on_export)
-        header.addWidget(export_btn)
-
-        return header
-    
     def refresh(self):
         """Full refresh - rebuild cache and table"""
         try:
@@ -391,7 +318,7 @@ class AlertsView(QWidget):
                     alert_dict = self._alert_dict(result, alert, triage, i)
                     self._alert_cache[alert_dict["key"]] = alert_dict
                     alerts_data.append(alert_dict)
-            
+
             # Handle empty state
             if not alerts_data:
                 self._remove_action_widgets()
@@ -407,10 +334,10 @@ class AlertsView(QWidget):
             # Apply filters and render the current page
             filtered = self._apply_filters(alerts_data)
             self._render_alerts(filtered)
-        
+
         except Exception as e:
             self._show_error_state(str(e))
-    
+
     def _incremental_refresh(self):
         """Incremental refresh - only update if new alerts"""
         try:
@@ -446,14 +373,14 @@ class AlertsView(QWidget):
                 all_alerts = list(self._alert_cache.values())
                 filtered = self._apply_filters(all_alerts)
                 self._render_alerts(filtered, preserve_scroll=True)
-        
+
         except Exception:
             pass  # Silent fail for incremental updates
-    
+
     def _apply_filters(self, alerts_data: list) -> list:
         """Apply priority filter and search"""
         filtered = alerts_data
-        
+
         # Priority filter
         if self._current_filter != "All":
             filtered = [a for a in filtered if self._current_filter.lower() in a["priority"].lower()]
@@ -479,7 +406,7 @@ class AlertsView(QWidget):
                 or search_lower in a["source_ip"].lower()
                 or search_lower in a["batch_id"].lower()
             ]
-        
+
         return filtered
 
     # ------------------------------------------------------------------
@@ -573,7 +500,7 @@ class AlertsView(QWidget):
             QMessageBox.critical(
                 self, "Export failed", f"Could not export alerts:\n{exc}"
             )
-    
+
     def _update_counter(self, alerts_data: list):
         """Update alert counters"""
         total = len(alerts_data)
@@ -585,13 +512,16 @@ class AlertsView(QWidget):
             if a.get("status", "New") in ("New", "In progress")
         )
 
-        parts = [f"Total: {total}", f"Open: {open_count}"]
-        if critical: parts.append(f"Critical: {critical}")
-        if high: parts.append(f"High: {high}")
-        if medium: parts.append(f"Medium: {medium}")
-        
-        self.counter_label.setText(" │ ".join(parts))
-    
+        parts = [
+            f"{total} alert{'s' if total != 1 else ''}",
+            f"{open_count} open",
+        ]
+        if critical: parts.append(f"{critical} critical")
+        if high: parts.append(f"{high} high")
+        if medium: parts.append(f"{medium} medium")
+
+        self.counter_label.setText("  \u00b7  ".join(parts))
+
     def set_priority_filter(self, priority: str):
         """Set priority filter programmatically"""
         priority_map = {
@@ -603,7 +533,7 @@ class AlertsView(QWidget):
         }
         filter_text = priority_map.get(priority.lower(), "All")
         self.priority_filter.setCurrentText(filter_text)
-    
+
     def _on_filter_changed(self, text: str):
         """Handle filter change"""
         self._current_filter = text
@@ -627,18 +557,18 @@ class AlertsView(QWidget):
         all_alerts = list(self._alert_cache.values())
         filtered = self._apply_filters(all_alerts)
         self._render_alerts(filtered)
-    
+
     def _show_empty_state(self):
         """Show appropriate empty state message"""
         try:
             stats = self.bridge.get_stats()
             pipeline_active = stats.get("pipeline_loaded", False)
-            
+
             # Get ingestion status
             running = stats.get('running', False)
             shutdown_flag = stats.get('shutdown_flag', False)
             sources_count = stats.get('sources_count', 0)
-            
+
             if shutdown_flag:
                 ingestion_status = "Stopped"
             elif running and sources_count > 0:
@@ -647,51 +577,51 @@ class AlertsView(QWidget):
                 ingestion_status = "Configured"
             else:
                 ingestion_status = "Not Started"
-            
+
             if not pipeline_active:
                 message = (
-                    "⚠️ Pipeline not active\n\n"
+                    "Pipeline not active\n\n"
                     "Models may be missing. Run:\n"
                     "python scripts/train_models.py"
                 )
             elif ingestion_status == "Not Started":
                 message = (
-                    "📁 No log sources configured\n\n"
+                    "No log sources configured\n\n"
                     "Add log files or directories to start monitoring"
                 )
             elif ingestion_status == "Stopped":
                 message = (
-                    "⏸️ Ingestion stopped\n\n"
+                    "Ingestion stopped\n\n"
                     "Restart the application to resume monitoring"
                 )
             elif ingestion_status == "Active":
                 message = (
-                    "🔄 Monitoring active - No alerts yet\n\n"
+                    "Monitoring active - No alerts yet\n\n"
                     "System is actively monitoring for security threats.\n"
                     "This is good - no threats detected!"
                 )
             else:
                 message = (
-                    "✅ No alerts detected\n\n"
+                    "No alerts detected\n\n"
                     "System is ready to monitor for security threats."
                 )
-            
+
             self.empty_label.setText(message)
         except Exception:
             self.empty_label.setText("No alerts to display.")
-        
+
         self.empty_label.show()
         self.table.hide()
-    
+
     def _show_error_state(self, error: str):
         """Show error state"""
         self._remove_action_widgets()
         self.table.setRowCount(0)
         error_msg = error[:100] + "..." if len(error) > 100 else error
-        self.empty_label.setText(f"❌ Error loading alerts:\n{error_msg}\n\nCheck logs for details.")
+        self.empty_label.setText(f"Error loading alerts:\n{error_msg}\n\nCheck logs for details.")
         self.empty_label.show()
         self.table.hide()
-    
+
     def _update_table(self, alerts_data: list):
         """Full table update - optimized batch operation"""
         # Disable updates during batch operation
@@ -701,34 +631,34 @@ class AlertsView(QWidget):
         # buttons would leak and paint at stale positions (UX-5 fix).
         self._remove_action_widgets()
         self.table.setRowCount(len(alerts_data))
-        
+
         for row, alert in enumerate(alerts_data):
             self._set_row_data(row, alert)
-        
+
         # Re-enable updates and refresh
         self.table.setUpdatesEnabled(True)
         self.table.resizeColumnsToContents()
-    
+
     def _update_table_incremental(self, alerts_data: list, preserve_scroll: bool = True):
         """Incremental update - preserve scroll position"""
         # Save scroll position
         scroll_bar = self.table.verticalScrollBar()
         scroll_pos = scroll_bar.value() if preserve_scroll else 0
-        
+
         # Disable updates
         self.table.setUpdatesEnabled(False)
 
         self._remove_action_widgets()
         self.table.setRowCount(len(alerts_data))
-        
+
         for row, alert in enumerate(alerts_data):
             self._set_row_data(row, alert)
-        
+
         # Re-enable and restore scroll
         self.table.setUpdatesEnabled(True)
         if preserve_scroll:
             scroll_bar.setValue(scroll_pos)
-            
+
     def _remove_action_widgets(self):
         """Detach and delete every Investigate button before a rebuild.
 
@@ -762,13 +692,15 @@ class AlertsView(QWidget):
             if col == self.CLASSIFICATION_COLUMN:
                 item.setData(Qt.ItemDataRole.UserRole, alert.get("alert_id"))
             self.table.setItem(row, col, item)
-            
+
         # Create and add action button
         btn = QPushButton("Investigate")
+        btn.setProperty("variant", "tableAction")
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
         source_ip = alert["source_ip"]
         btn.clicked.connect(lambda checked=False, ip=source_ip: self._trigger_investigation(ip))
         self.table.setCellWidget(row, self.ACTION_COLUMN, btn)
-        
+
         self._apply_row_visual_state(row, alert["priority"], source_ip)
         self._update_action_button(row, source_ip)
 
@@ -776,20 +708,14 @@ class AlertsView(QWidget):
         """Apply priority and in-flight visual state to one table row."""
         in_flight = self.bridge.is_investigation_in_flight(source_ip)
 
-        priority_lower = priority.lower()
-        if in_flight:
-            color = QColor(_palette().sev_info)
-        elif any(k in priority_lower for k in ("critical", "high", "medium")):
-            color = QColor(severity_color(priority))
-        else:
-            color = QColor(_palette().text)
-
+        p = _palette()
+        muted = QColor(p.text_muted)
+        normal = QColor(p.text_muted if in_flight else p.text)
+        secondary = (self.TIME_COLUMN, self.CONFIDENCE_COLUMN, self.BATCH_ID_COLUMN)
         for col in range(self.ACTION_COLUMN):
-            if col == self.STATUS_COLUMN:
-                continue  # status cell keeps its own colour
             item = self.table.item(row, col)
             if item:
-                item.setForeground(color)
+                item.setForeground(muted if col in secondary else normal)
                 item.setToolTip("Investigation in progress" if in_flight else "")
 
         self._style_status_cell(row)
@@ -816,49 +742,19 @@ class AlertsView(QWidget):
         btn = self.table.cellWidget(row, self.ACTION_COLUMN)
         if not isinstance(btn, QPushButton):
             return
-        
+
         in_flight = self.bridge.is_investigation_in_flight(source_ip)
         is_invalid_ip = not source_ip or source_ip.upper() == "N/A"
-        
-        p = _palette()
+
         if in_flight:
             btn.setEnabled(False)
             btn.setText("Investigating...")
-            btn.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: {p.scrollbar};
-                    color: {p.text_muted};
-                    border: 1px solid {p.scrollbar};
-                    border-radius: 4px;
-                    padding: 2px 8px;
-                }}
-            """)
         elif is_invalid_ip:
             btn.setEnabled(False)
             btn.setText("N/A")
-            btn.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: transparent;
-                    color: {p.text_muted};
-                    border: none;
-                }}
-            """)
         else:
             btn.setEnabled(True)
             btn.setText("Investigate")
-            btn.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: {p.accent};
-                    color: {p.text_inverse};
-                    border: none;
-                    border-radius: 4px;
-                    padding: 2px 8px;
-                    font-weight: bold;
-                }}
-                QPushButton:hover {{
-                    background-color: {p.accent_hover};
-                }}
-            """)
 
     def _reapply_in_flight_row_state(self):
         """Refresh in-flight visuals for currently displayed rows."""
@@ -869,7 +765,7 @@ class AlertsView(QWidget):
             source_ip = source_item.text() if source_item else ""
             self._apply_row_visual_state(row, priority, source_ip)
             self._update_action_button(row, source_ip)
-    
+
     def _on_row_clicked(self, item):
         """Handle row click with error handling"""
         try:
@@ -1091,7 +987,7 @@ class AlertsView(QWidget):
             return
 
         rows = self._find_rows_by_ip(source_ip)
-        
+
         try:
             self.bridge.investigate_target(source_ip)
             if self.report_drawer is not None:

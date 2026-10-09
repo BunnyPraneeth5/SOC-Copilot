@@ -103,9 +103,9 @@ class GovernanceState:
 
 
 GOVERNANCE_STATES: Dict[str, StateConfig] = _StateMap({
-    GovernanceState.OK: StateConfig(label="OK", color="success", icon="✓"),
-    GovernanceState.LIMITED: StateConfig(label="Limited", color="warning", icon="⚠"),
-    GovernanceState.HALTED: StateConfig(label="Halted", color="sev_critical", icon="🛑"),
+    GovernanceState.OK: StateConfig(label="OK", color="success", icon="●"),
+    GovernanceState.LIMITED: StateConfig(label="Limited", color="warning", icon="●"),
+    GovernanceState.HALTED: StateConfig(label="Halted", color="sev_critical", icon="●"),
 })
 
 

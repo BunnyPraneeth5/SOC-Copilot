@@ -127,7 +127,7 @@ class TestPagination:
         assert view.table.rowCount() == 100
         assert "Page 1 of 2" in view.page_label.text()
         assert "of 125" in view.page_label.text()
-        assert "Total: 125" in view.counter_label.text()
+        assert "125 alerts" in view.counter_label.text()
         destroy(view)
 
     def test_one_action_button_per_page_row(self, qapp):

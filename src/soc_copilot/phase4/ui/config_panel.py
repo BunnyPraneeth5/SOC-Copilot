@@ -18,8 +18,10 @@ from PyQt6.QtGui import QFont
 
 from ..config import ConfigManager
 from ..kill_switch import KillSwitch
-from .theme import ThemeManager, set_role
+from .theme import ThemeManager, set_role, PAGE_MARGIN, PAGE_SPACING
 from .motion import crossfade_window
+from .components import PageHeader, SettingsCard, Switch, setting_row, text_button
+from .icons import icon_label
 from .notifications import NOTIFY_PRIORITIES
 from .state_constants import (
     get_ingestion_state, get_governance_state,
@@ -32,138 +34,70 @@ def _palette():
     return ThemeManager.instance().palette
 
 
-class ToggleSwitch(QFrame):
-    """Custom toggle switch widget"""
-    
-    def __init__(self, initial_state: bool = False, on_toggle=None):
-        super().__init__()
-        self._state = initial_state
-        self._on_toggle = on_toggle
-        self._init_ui()
-        self._update_style()
-    
-    def _init_ui(self):
-        self.setFixedSize(60, 30)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        
-        layout = QHBoxLayout()
-        layout.setContentsMargins(2, 2, 2, 2)
-        
-        self.knob = QLabel()
-        self.knob.setFixedSize(24, 24)
-        
-        if self._state:
-            layout.addStretch()
-            layout.addWidget(self.knob)
-        else:
-            layout.addWidget(self.knob)
-            layout.addStretch()
-        
-        self.setLayout(layout)
-        ThemeManager.instance().theme_changed.connect(self._update_style)
+class ToggleSwitch(Switch):
+    """Legacy API (``is_on`` / ``set_state`` / ``on_toggle``) on ``Switch``."""
 
-    def _update_style(self):
-        p = _palette()
-        if self._state:
-            self.setStyleSheet(f"""
-                ToggleSwitch {{
-                    background-color: {p.success};
-                    border-radius: 15px;
-                    border: 2px solid {p.success};
-                }}
-            """)
-            self.knob.setStyleSheet(f"""
-                QLabel {{
-                    background-color: {p.text};
-                    border-radius: 12px;
-                }}
-            """)
-        else:
-            self.setStyleSheet(f"""
-                ToggleSwitch {{
-                    background-color: {p.text_muted};
-                    border-radius: 15px;
-                    border: 2px solid {p.border};
-                }}
-            """)
-            self.knob.setStyleSheet(f"""
-                QLabel {{
-                    background-color: {p.surface_alt};
-                    border-radius: 12px;
-                }}
-            """)
-    
-    def mousePressEvent(self, event):
-        self._state = not self._state
-        self._update_style()
-        self._rebuild_layout()
+    def __init__(self, initial_state: bool = False, on_toggle=None):
+        super().__init__("")
+        self.setChecked(bool(initial_state))
+        self._on_toggle = on_toggle
+        self.toggled.connect(self._emit_toggle)
+
+    def _emit_toggle(self, state: bool):
         if self._on_toggle:
-            self._on_toggle(self._state)
-    
-    def _rebuild_layout(self):
-        """Rebuild layout to move knob"""
-        layout = self.layout()
-        while layout.count():
-            item = layout.takeAt(0)
-            # Don't delete the knob widget
-        
-        if self._state:
-            layout.addStretch()
-            layout.addWidget(self.knob)
-        else:
-            layout.addWidget(self.knob)
-            layout.addStretch()
-    
+            self._on_toggle(state)
+
     def is_on(self) -> bool:
-        return self._state
-    
+        return self.isChecked()
+
     def set_state(self, state: bool):
-        if self._state != state:
-            self._state = state
-            self._update_style()
-            self._rebuild_layout()
+        """Set without invoking the callback."""
+        self.blockSignals(True)
+        self.setChecked(bool(state))
+        self.blockSignals(False)
+        self.update()
 
 
 class StatusIndicator(QFrame):
-    """Status indicator with colored dot and label"""
-    
+    """Status row: coloured dot, muted label, value."""
+
     def __init__(self, label: str, status: str = "Unknown", color: str | None = None):
         super().__init__()
         self._init_ui(label, status, color or _palette().text_muted)
-    
+
     def _init_ui(self, label: str, status: str, color: str):
         layout = QHBoxLayout()
-        layout.setContentsMargins(5, 5, 5, 5)
-        
-        # Colored indicator dot
+        layout.setContentsMargins(0, 4, 0, 4)
+        layout.setSpacing(8)
+
         self.dot = QLabel("●")
-        self.dot.setStyleSheet(f"color: {color}; font-size: 16px;")
+        self.dot.setFixedWidth(12)
         layout.addWidget(self.dot)
-        
-        # Label
-        self._label_widget = QLabel(f"{label}:")
-        self._label_widget.setStyleSheet(
-            f"color: {_palette().text_muted}; font-weight: bold;"
-        )
+
+        self._label_widget = QLabel(label)
+        self._label_widget.setMinimumWidth(150)
         layout.addWidget(self._label_widget)
 
-        # Status value
         self.status_label = QLabel(status)
-        layout.addWidget(self.status_label)
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label, 1)
 
-        layout.addStretch()
         self.setLayout(layout)
+        # Sit on the card, not on the window background
+        self.setStyleSheet("StatusIndicator { background: transparent; }")
         self._color = color
+        self._apply_theme()
         ThemeManager.instance().theme_changed.connect(self._apply_theme)
 
     def _apply_theme(self):
         self._label_widget.setStyleSheet(
-            f"color: {_palette().text_muted}; font-weight: bold;"
+            f"color: {_palette().text_muted}; font-size: 12px;"
         )
+        self.status_label.setStyleSheet("font-size: 12px;")
         self._update_dot()
 
     def _update_dot(self):
-        self.dot.setStyleSheet(f"color: {self._color}; font-size: 16px;")
+        self.dot.setStyleSheet(f"color: {self._color}; font-size: 10px;")
 
     def update_status(self, status: str, color: str):
         """Update status text and color"""
@@ -174,58 +108,64 @@ class StatusIndicator(QFrame):
 
 class ConfigPanel(QWidget):
     """Configuration Status Panel with toggle and status display
-    
+
     Displays:
     - System Logs toggle (writes to YAML, does NOT start ingestion)
     - Restart Required warning when config changes
     - Read-only status indicators for system state
     """
-    
+
     def __init__(self, bridge=None, project_root: Optional[Path] = None):
         super().__init__()
         self.bridge = bridge
-        
+
         if project_root is None:
             project_root = Path(__file__).parent.parent.parent.parent.parent
         self.project_root = Path(project_root)
-        
+
         self.config_manager = ConfigManager(self.project_root)
         self.kill_switch = KillSwitch(self.project_root)
-        
+
         self._config_changed = False
         self._provider_check_running = False
         self._init_ui()
         if self.bridge is not None and hasattr(self.bridge, "providersChecked"):
             self.bridge.providersChecked.connect(self._on_providers_checked)
         self._refresh_status()
-    
+
     def _init_ui(self):
         layout = QVBoxLayout()
-        layout.setSpacing(15)
-        
-        # Title
-        title = QLabel("Configuration Status")
-        title.setFont(QFont("Arial", 16, QFont.Weight.Bold))
-        layout.addWidget(title)
-        
-        # Appearance section (theme + colour-blind-safe severities)
-        appearance_group = QGroupBox("Appearance")
-        appearance_layout = QHBoxLayout()
+        layout.setContentsMargins(PAGE_MARGIN, PAGE_MARGIN, PAGE_MARGIN, PAGE_MARGIN)
+        layout.setSpacing(PAGE_SPACING)
 
-        appearance_layout.addWidget(QLabel("Theme:"))
+        self.header = PageHeader(
+            "Settings", "settings",
+            "Changes apply immediately and are saved for next launch.",
+        )
+        layout.addWidget(self.header)
+        tm = ThemeManager.instance()
+
+        # ----- Appearance ----------------------------------------------
+        appearance = SettingsCard("Appearance", "How the app looks.", "grid")
         self.theme_combo = QComboBox()
         self.theme_combo.addItems(["Dark", "Light"])
-        tm = ThemeManager.instance()
         self.theme_combo.setCurrentIndex(0 if tm.theme_name == "dark" else 1)
+        self.theme_combo.setMinimumWidth(120)
         self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
-        appearance_layout.addWidget(self.theme_combo)
+        appearance.add(setting_row("Theme", "Dark or light interface.", self.theme_combo))
 
-        self.colorblind_check = QCheckBox("Colour-blind-safe severity colours")
+        self.colorblind_check = Switch()
+        self.colorblind_check.setAccessibleName("Colour-blind-safe severity colours")
         self.colorblind_check.setChecked(tm.colorblind)
         self.colorblind_check.toggled.connect(self._on_colorblind_toggled)
-        appearance_layout.addWidget(self.colorblind_check)
+        appearance.add(setting_row(
+            "Colour-blind-safe severities",
+            "Use the Okabe-Ito palette for severity colours.",
+            self.colorblind_check,
+        ))
 
-        self.reduce_motion_check = QCheckBox("Reduce motion")
+        self.reduce_motion_check = Switch()
+        self.reduce_motion_check.setAccessibleName("Reduce motion")
         self.reduce_motion_check.setToolTip(
             "Turn off page fades, sliding panels and animated counters"
         )
@@ -233,180 +173,159 @@ class ConfigPanel(QWidget):
         self.reduce_motion_check.toggled.connect(
             ThemeManager.instance().set_reduce_motion
         )
-        appearance_layout.addWidget(self.reduce_motion_check)
+        appearance.add(setting_row(
+            "Reduce motion",
+            "Turn off page fades, sliding panels and animated counters.",
+            self.reduce_motion_check,
+        ))
+        layout.addWidget(appearance)
 
-        appearance_layout.addStretch()
-        appearance_group.setLayout(appearance_layout)
-        layout.addWidget(appearance_group)
-
-        # Desktop notifications (UX-8) — enabled once MainWindow attaches
-        # its AlertNotifier
+        # ----- Notifications (UX-8) -------------------------------------
+        # Enabled once MainWindow attaches its AlertNotifier.
         self.notifier = None
-        notifications_group = QGroupBox("Notifications")
-        self._notifications_group = notifications_group
-        notifications_layout = QHBoxLayout()
-        self.notify_enabled_check = QCheckBox("Desktop notifications for new alerts")
+        notifications = SettingsCard(
+            "Notifications", "System-tray alerts for new high-priority detections.", "bell"
+        )
+        self._notifications_group = notifications
+        self.notify_enabled_check = Switch()
+        self.notify_enabled_check.setAccessibleName("Desktop notifications for new alerts")
         self.notify_enabled_check.setToolTip(
             "Show a system-tray notification when a new alert arrives "
             "(also available from the tray icon menu)"
         )
         self.notify_enabled_check.toggled.connect(self._on_notify_enabled_toggled)
-        notifications_layout.addWidget(self.notify_enabled_check)
+        notifications.add(setting_row(
+            "Desktop notifications",
+            "Notify when a new alert arrives. Also available from the tray icon menu.",
+            self.notify_enabled_check,
+        ))
+        priorities = QWidget()
+        priorities.setStyleSheet("background: transparent;")
+        prio_layout = QHBoxLayout(priorities)
+        prio_layout.setContentsMargins(0, 0, 0, 0)
+        prio_layout.setSpacing(18)
         self.notify_priority_checks = {}
         for priority in NOTIFY_PRIORITIES:
-            check = QCheckBox(priority)
+            check = Switch(priority)
             check.toggled.connect(
                 lambda on, p=priority: self._on_notify_priority_toggled(p, on)
             )
-            notifications_layout.addWidget(check)
+            prio_layout.addWidget(check)
             self.notify_priority_checks[priority] = check
-        notifications_layout.addStretch()
+        notifications.add(setting_row("Notify for", "", priorities))
         self.notify_tray_note = QLabel("")
-        set_role(self.notify_tray_note, "muted")
-        notifications_layout.addWidget(self.notify_tray_note)
-        notifications_group.setLayout(notifications_layout)
-        notifications_group.setEnabled(False)
-        layout.addWidget(notifications_group)
+        set_role(self.notify_tray_note, "pageSubtitle")
+        notifications.add(self.notify_tray_note)
+        notifications.setEnabled(False)
+        layout.addWidget(notifications)
 
-        # Restart warning (hidden by default)
+        # ----- Data collection --------------------------------------------
+        collection = SettingsCard(
+            "Data collection", "Sources SOC Copilot reads from this machine.", "database"
+        )
+        initial_state = self.config_manager.get_system_logs_enabled()
+        self.system_logs_toggle = ToggleSwitch(initial_state, self._on_toggle_changed)
+        self.system_logs_toggle.setAccessibleName("Enable system logs")
+        collection.add(setting_row(
+            "System log ingestion",
+            "Read Windows event logs. Needs administrator rights and a restart.",
+            self.system_logs_toggle,
+        ))
+
+        # Restart notice (hidden until the toggle changes)
         self.restart_warning = QFrame()
         self.restart_warning.setObjectName("restartWarning")
-        self.restart_warning.setStyleSheet(f"""
-            QFrame#restartWarning {{
-                background-color: {_palette().warning};
-                border-radius: 5px;
-                padding: 10px;
-            }}
-        """)
         warning_layout = QHBoxLayout()
-        warning_icon = QLabel("⚠️")
-        warning_icon.setFont(QFont("Arial", 18))
-        warning_text = QLabel("Configuration changed. Restart required for changes to take effect.")
+        warning_layout.setContentsMargins(12, 8, 12, 8)
+        warning_layout.setSpacing(8)
+        warning_layout.addWidget(icon_label("alert-triangle", "warning", 16))
+        warning_text = QLabel("Restart SOC Copilot for this change to take effect.")
         self._warning_text = warning_text
-        warning_text.setStyleSheet(
-            f"color: {_palette().text_inverse}; font-weight: bold;"
-        )
-        warning_layout.addWidget(warning_icon)
         warning_layout.addWidget(warning_text)
         warning_layout.addStretch()
         self.restart_warning.setLayout(warning_layout)
         self.restart_warning.setVisible(False)
-        layout.addWidget(self.restart_warning)
-        
-        # System Logs Toggle Section
-        toggle_group = QGroupBox("System Log Ingestion")
-        toggle_layout = QHBoxLayout()
+        collection.add(self.restart_warning)
+        layout.addWidget(collection)
 
-        toggle_label = QLabel("Enable System Logs:")
-        toggle_layout.addWidget(toggle_label)
-        
-        initial_state = self.config_manager.get_system_logs_enabled()
-        self.system_logs_toggle = ToggleSwitch(initial_state, self._on_toggle_changed)
-        toggle_layout.addWidget(self.system_logs_toggle)
-        
-        toggle_layout.addStretch()
-        
-        toggle_note = QLabel("Changes require application restart")
-        toggle_note.setStyleSheet(
-            f"color: {_palette().text_muted}; font-style: italic;"
+        # ----- System status ------------------------------------------------
+        status_card = SettingsCard(
+            "System status", "Read-only view of the detection engine.", "activity"
         )
-        toggle_layout.addWidget(toggle_note)
-        
-        toggle_group.setLayout(toggle_layout)
-        layout.addWidget(toggle_group)
-        
-        # Status Indicators Section
-        status_group = QGroupBox("System Status")
+        self._status_card = status_card
         status_layout = QGridLayout()
-        status_layout.setSpacing(10)
-        
-        # System Logs Enabled
+        status_layout.setHorizontalSpacing(32)
+        status_layout.setVerticalSpacing(2)
         _p = _palette()
         self.logs_indicator = StatusIndicator("System Logs", "Disabled", _p.text_muted)
-        status_layout.addWidget(self.logs_indicator, 0, 0)
-
-        # Operating System
         self.os_indicator = StatusIndicator("Operating System", platform.system(), _p.info)
-        status_layout.addWidget(self.os_indicator, 0, 1)
-
-        # Permission Status
         self.perm_indicator = StatusIndicator("Permissions", "Unknown", _p.text_muted)
-        status_layout.addWidget(self.perm_indicator, 1, 0)
-
-        # Kill Switch
         self.kill_indicator = StatusIndicator("Kill Switch", "Inactive", _p.success)
-        status_layout.addWidget(self.kill_indicator, 1, 1)
-
-        # Ingestion Status
         self.ingestion_indicator = StatusIndicator("Ingestion", "Not Started", _p.text_muted)
-        status_layout.addWidget(self.ingestion_indicator, 2, 0)
-
-        # Model Integrity
         self.integrity_indicator = StatusIndicator("Model Integrity", "Unknown", _p.text_muted)
-        status_layout.addWidget(self.integrity_indicator, 2, 1)
-
-        # Online Enrichment
         self.online_indicator = StatusIndicator("Online Enrichment", "Disabled", _p.success)
-        status_layout.addWidget(self.online_indicator, 3, 0)
-
-        # Noise Suppression
         self.noise_indicator = StatusIndicator("Noise Suppression", "0 suppressed", _p.info)
-        status_layout.addWidget(self.noise_indicator, 3, 1)
-
-        # Model Drift (Phase-2 monitor)
         self.drift_indicator = StatusIndicator("Model Drift", "Unavailable", _p.text_muted)
-        status_layout.addWidget(self.drift_indicator, 4, 0)
-        
-        status_group.setLayout(status_layout)
-        layout.addWidget(status_group)
+        for i, indicator in enumerate((
+            self.ingestion_indicator, self.kill_indicator,
+            self.integrity_indicator, self.online_indicator,
+            self.drift_indicator, self.noise_indicator,
+            self.logs_indicator, self.perm_indicator,
+            self.os_indicator,
+        )):
+            status_layout.addWidget(indicator, i // 2, i % 2)
+        status_card.add(status_layout)
+        layout.addWidget(status_card)
 
-        # Threat Intelligence Providers Section
-        providers_group = QGroupBox("Threat Intelligence Providers")
-        self._providers_group = providers_group
-        providers_layout = QVBoxLayout()
-        providers_layout.setSpacing(5)
-
+        # ----- Threat intelligence providers --------------------------------
+        providers = SettingsCard(
+            "Threat intelligence providers",
+            "Online lookups that enrich investigations. They are used only "
+            "when online enrichment is enabled.",
+            "globe",
+        )
+        self._providers_group = providers
         self._provider_indicators = {}
-        for key, label in (
+        prov_grid = QGridLayout()
+        prov_grid.setHorizontalSpacing(32)
+        prov_grid.setVerticalSpacing(2)
+        for i, (key, label) in enumerate((
             ("whois", "WHOIS / RDAP"),
             ("geoip", "GeoIP (ipwho.is)"),
             ("abuseipdb", "AbuseIPDB"),
             ("virustotal", "VirusTotal"),
             ("shodan", "Shodan"),
             ("report_llm", "Report LLM"),
-        ):
+        )):
             indicator = StatusIndicator(label, "Unknown", _palette().text_muted)
             self._provider_indicators[key] = indicator
-            providers_layout.addWidget(indicator)
+            prov_grid.addWidget(indicator, i // 2, i % 2)
+        providers.add(prov_grid)
 
-        self.check_providers_button = QPushButton("Check connectivity")
-        self._style_check_button()
+        check_row = QHBoxLayout()
+        self.check_providers_button = text_button(
+            "Check connectivity", "refresh", "secondary", "accent"
+        )
         self.check_providers_button.clicked.connect(self._on_check_providers)
-        providers_layout.addWidget(self.check_providers_button)
-
-        providers_group.setLayout(providers_layout)
-        layout.addWidget(providers_group)
-
-        # Info text
-        info_label = QLabel(
-            "Appearance changes apply immediately and are saved for next launch. "
-            "This panel shows the current configuration and system status; the system "
-            "logs toggle still requires a restart. All other indicators are read-only. "
-            "Use 'Check connectivity' to probe threat-intelligence providers (requires online enrichment)."
-        )
-        self._info_label = info_label
-        info_label.setStyleSheet(
-            f"color: {_palette().text_muted}; font-style: italic;"
-        )
-        info_label.setWordWrap(True)
-        layout.addWidget(info_label)
+        check_row.addWidget(self.check_providers_button)
+        check_row.addStretch()
+        providers.add(check_row)
+        layout.addWidget(providers)
 
         layout.addStretch()
 
+        # Readable line length: cap the width of the settings column.
+        column = QWidget()
+        column.setLayout(layout)
+        column.setMaximumWidth(1040)
+        content = QWidget()
+        content_layout = QHBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.addWidget(column)
+        content_layout.addStretch()
+
         # Scroll the settings so their height doesn't set the window's
         # minimum height (the page stack sizes to its tallest page).
-        content = QWidget()
-        content.setLayout(layout)
         scroll = QScrollArea()
         self._scroll = scroll
         scroll.setWidgetResizable(True)
@@ -416,41 +335,23 @@ class ConfigPanel(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(scroll)
         self.setLayout(outer)
+        self._apply_styles()
         ThemeManager.instance().theme_changed.connect(self._apply_theme)
 
-    def _style_check_button(self):
-        self.check_providers_button.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {_palette().info};
-                color: {_palette().text_inverse};
-                border: none;
-                border-radius: 4px;
-                padding: 6px 12px;
-                font-weight: bold;
-            }}
-            QPushButton:disabled {{
-                background-color: {_palette().surface_alt};
-                color: {_palette().text_muted};
-            }}
-        """)
-
-    def _apply_theme(self):
-        """Re-apply palette-derived styles and refresh indicator colours."""
+    def _apply_styles(self):
         p = _palette()
         self.restart_warning.setStyleSheet(f"""
             QFrame#restartWarning {{
-                background-color: {p.warning};
-                border-radius: 5px;
-                padding: 10px;
+                background-color: {p.warning_bg};
+                border: 1px solid {p.warning};
+                border-radius: 6px;
             }}
         """)
-        self._warning_text.setStyleSheet(
-            f"color: {p.text_inverse}; font-weight: bold;"
-        )
-        self._style_check_button()
-        self._info_label.setStyleSheet(
-            f"color: {p.text_muted}; font-style: italic;"
-        )
+        self._warning_text.setStyleSheet(f"color: {p.text}; font-size: 12px;")
+
+    def _apply_theme(self):
+        """Re-apply palette-derived styles and refresh indicator colours."""
+        self._apply_styles()
         # Keep the appearance controls in sync (no signal re-entry)
         tm = ThemeManager.instance()
         self.theme_combo.blockSignals(True)
@@ -468,6 +369,8 @@ class ConfigPanel(QWidget):
     def show_section(self, name: str) -> None:
         """Scroll to the setting behind a header status chip (UX-9)."""
         target = {
+            "pipeline": self._status_card,
+            "ingestion": self._status_card,
             "enrichment": self.online_indicator,
             "kill_switch": self.kill_indicator,
             "integrity": self.integrity_indicator,
@@ -521,20 +424,20 @@ class ConfigPanel(QWidget):
             self._config_changed = True
             self.restart_warning.setVisible(True)
             self._update_logs_indicator(new_state)
-    
+
     def _update_logs_indicator(self, enabled: bool):
         """Update system logs status indicator"""
         if enabled:
             self.logs_indicator.update_status("Enabled", _palette().success)
         else:
             self.logs_indicator.update_status("Disabled", _palette().text_muted)
-    
+
     def _refresh_status(self):
         """Refresh all status indicators"""
         # System Logs
         logs_enabled = self.config_manager.get_system_logs_enabled()
         self._update_logs_indicator(logs_enabled)
-        
+
         # Permissions (check system log access)
         try:
             from ..ingestion.system_log_reader import SystemLogReader
@@ -548,7 +451,7 @@ class ConfigPanel(QWidget):
                 self.perm_indicator.update_status("Limited", _palette().warning)
         except Exception:
             self.perm_indicator.update_status("Unknown", _palette().text_muted)
-        
+
         # Kill Switch (using centralized governance state for color consistency)
         if self.kill_switch.is_active():
             gov_cfg = GOVERNANCE_STATES[GovernanceState.HALTED]
@@ -556,7 +459,7 @@ class ConfigPanel(QWidget):
         else:
             gov_cfg = GOVERNANCE_STATES[GovernanceState.OK]
             self.kill_indicator.update_status("Inactive", gov_cfg.color)
-        
+
         # Ingestion Status (using centralized ingestion states)
         if self.bridge:
             try:
@@ -564,7 +467,7 @@ class ConfigPanel(QWidget):
                 running = stats.get('running', False)
                 shutdown = stats.get('shutdown_flag', False)
                 sources = stats.get('sources_count', 0)
-                
+
                 ingestion_state = get_ingestion_state(running, sources, shutdown)
                 ingestion_cfg = INGESTION_STATES[ingestion_state]
                 self.ingestion_indicator.update_status(ingestion_cfg.label, ingestion_cfg.color)
@@ -684,7 +587,7 @@ class ConfigPanel(QWidget):
             return
         self._provider_check_running = True
         self.check_providers_button.setEnabled(False)
-        self.check_providers_button.setText("Checking...")
+        self.check_providers_button.setText(" Checking...")
 
         if self.bridge is not None:
             self.bridge.check_provider_connectivity()
@@ -700,7 +603,7 @@ class ConfigPanel(QWidget):
     def _on_providers_checked(self, statuses):
         """Apply probe results delivered from the worker thread."""
         self._provider_check_running = False
-        self.check_providers_button.setText("Check connectivity")
+        self.check_providers_button.setText(" Check connectivity")
         self.check_providers_button.setEnabled(True)
         if statuses:
             self._apply_provider_statuses(statuses)

@@ -231,7 +231,7 @@ class TestAlertsViewTriage:
         ctrl.result_store.add(_result("b2", "ML-BBB"))
         ctrl.set_alert_status("ML-BBB", "False positive")
         view.refresh()
-        assert "Open: 1" in view.counter_label.text()
+        assert "1 open" in view.counter_label.text()
         destroy(view); destroy(bridge)
 
     def test_context_menu_sets_status(self, qapp, tmp_path):

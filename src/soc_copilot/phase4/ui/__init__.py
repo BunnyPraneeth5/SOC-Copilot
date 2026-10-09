@@ -1,4 +1,4 @@
-"""UI/UX Layer for SOC Copilot - v0.3.0 Dashboard UX Redesign"""
+"""UI/UX Layer for SOC Copilot"""
 
 from .main_window import MainWindow
 from .dashboard_v2 import Dashboard
@@ -8,20 +8,12 @@ from .config_panel import ConfigPanel
 from .splash_screen import SplashScreen, create_splash
 from .about_dialog import AboutDialog
 from .system_status_bar import SystemStatusBar, PermissionBanner, KillSwitchBanner
-from .dashboard_components import (
-    ThreatLevelBanner,
-    RecentAlertsTimeline,
-    EmptyStateCard,
-    QuickActionsBar,
-    CompactMetricCard,
-    SystemHealthGrid
-)
 
 __all__ = [
-    "MainWindow", 
+    "MainWindow",
     "Dashboard",
     "AlertsView",
-    "ControllerBridge", 
+    "ControllerBridge",
     "ConfigPanel",
     "SplashScreen",
     "create_splash",
@@ -29,10 +21,4 @@ __all__ = [
     "SystemStatusBar",
     "PermissionBanner",
     "KillSwitchBanner",
-    "ThreatLevelBanner",
-    "RecentAlertsTimeline",
-    "EmptyStateCard",
-    "QuickActionsBar",
-    "CompactMetricCard",
-    "SystemHealthGrid"
 ]

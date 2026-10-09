@@ -258,28 +258,16 @@ class TestStyleScoping:
 
     def test_metric_card(self, qapp):
         from soc_copilot.phase4.ui.dashboard_v2 import MetricCard
-        w = MetricCard("Critical", "🔥", "#ff0000")
+        w = MetricCard("Critical", "alert-octagon", "sev_critical")
         self._assert_scoped(w)
         w.deleteLater()
-
-    def test_system_status_strip(self, qapp):
-        from soc_copilot.phase4.ui.dashboard_v2 import SystemStatusStrip
-        self._assert_scoped(SystemStatusStrip())
 
     def test_banners_and_cards(self, qapp):
         from soc_copilot.phase4.ui.system_status_bar import (
             KillSwitchBanner,
             PermissionBanner,
         )
-        from soc_copilot.phase4.ui.dashboard_components import (
-            CompactMetricCard,
-            EmptyStateCard,
-            ThreatLevelBanner,
-        )
+        from soc_copilot.phase4.ui.components import SettingsCard
         self._assert_scoped(PermissionBanner("msg"))
         self._assert_scoped(KillSwitchBanner())
-        self._assert_scoped(ThreatLevelBanner())
-        self._assert_scoped(CompactMetricCard("t", "critical"))
-        self._assert_scoped(
-            EmptyStateCard("i", "t", "d", "", "warning")
-        )
+        self._assert_scoped(SettingsCard("Title", "Description", "bell"))

@@ -1,14 +1,17 @@
 """All Logs view with table displaying benign and alert logs"""
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem, 
+    QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
     QHeaderView, QLabel, QPushButton, QComboBox, QLineEdit, QMessageBox
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont, QColor
 
-from .theme import ThemeManager
+from .theme import ThemeManager, set_role, PAGE_MARGIN, PAGE_SPACING, FONT_MONO
 from .motion import show_toast
+from .components import (
+    PageHeader, icon_button, text_button, style_table, status_delegate,
+)
 
 
 def _palette():
@@ -17,7 +20,7 @@ def _palette():
 
 class AllLogsView(QWidget):
     """Scalable logs table for displaying all processed events"""
-    
+
     def __init__(self, bridge):
         super().__init__()
         self.bridge = bridge
@@ -45,42 +48,50 @@ class AllLogsView(QWidget):
         if self._dirty:
             self._dirty = False
             self.refresh()
-        
+
     def _init_ui(self):
         layout = QVBoxLayout()
-        layout.setContentsMargins(15, 15, 15, 15)
-        layout.setSpacing(10)
-        
+        layout.setContentsMargins(PAGE_MARGIN, PAGE_MARGIN, PAGE_MARGIN, PAGE_MARGIN)
+        layout.setSpacing(PAGE_SPACING)
+
         # Header
         header = self._create_header()
         layout.addLayout(header)
-        
+
         # Table
         self.table = QTableWidget()
         self.table.setColumnCount(5)
         self.table.setHorizontalHeaderLabels([
             "Time", "Classification", "Source IP", "Raw Log", "Status"
         ])
-        
+
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.table.setAlternatingRowColors(True)
+        style_table(self.table)
+        self.table.setItemDelegateForColumn(4, status_delegate(self.table))
         self.table.setSortingEnabled(False)
-        self.table.horizontalHeader().setStretchLastSection(False)
-        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        self.table.verticalHeader().setDefaultSectionSize(32)
-        
+        header = self.table.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(0, 100)
+        self.table.setColumnWidth(1, 150)
+        self.table.setColumnWidth(2, 130)
+        self.table.setColumnWidth(4, 100)
+        self._mono = QFont(FONT_MONO)
+        self._mono.setStyleHint(QFont.StyleHint.Monospace)
+        self._mono.setPointSize(9)
+
         self.table.setUpdatesEnabled(True)
-        
+
         layout.addWidget(self.table)
-        
+
         # Empty state label
         self.empty_label = QLabel("No logs to display yet.")
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.empty_label.setStyleSheet(
-            f"color: {_palette().text_muted}; font-style: italic; padding: 20px;"
+            f"color: {_palette().text_muted}; padding: 40px; font-size: 13px;"
         )
-        self.empty_label.setFont(QFont("Segoe UI", 12))
         layout.addWidget(self.empty_label)
 
         self.setLayout(layout)
@@ -90,119 +101,49 @@ class AllLogsView(QWidget):
         """Re-apply palette-derived styles after a theme switch."""
         p = _palette()
         self.empty_label.setStyleSheet(
-            f"color: {p.text_muted}; font-style: italic; padding: 20px;"
+            f"color: {p.text_muted}; padding: 40px; font-size: 13px;"
         )
-        if getattr(self, "counter_label", None) is not None:
-            self.counter_label.setStyleSheet(
-                f"color: {p.text_muted}; font-size: 11px;"
-            )
-            self._filter_label.setStyleSheet(
-                f"color: {p.text_muted}; font-size: 12px;"
-            )
-            self.class_filter.setStyleSheet(self._combo_style(p))
-            self.search_box.setStyleSheet(self._search_style(p))
-            self._refresh_btn.setStyleSheet(self._refresh_style(p))
         self.refresh()
 
-    @staticmethod
-    def _combo_style(p) -> str:
-        return f"""
-            QComboBox {{
-                background-color: {p.surface_alt};
-                color: {p.text};
-                border: 1px solid {p.scrollbar};
-                border-radius: 4px;
-                padding: 5px 10px;
-                min-width: 100px;
-            }}
-            QComboBox::drop-down {{ border: none; }}
-            QComboBox QAbstractItemView {{
-                background-color: {p.surface_alt};
-                color: {p.text};
-                selection-background-color: {p.accent};
-                selection-color: {p.text_inverse};
-            }}
-        """
+    def _create_header(self) -> QVBoxLayout:
+        box = QVBoxLayout()
+        box.setSpacing(PAGE_SPACING)
 
-    @staticmethod
-    def _search_style(p) -> str:
-        return f"""
-            QLineEdit {{
-                background-color: {p.surface_alt};
-                color: {p.text};
-                border: 1px solid {p.scrollbar};
-                border-radius: 4px;
-                padding: 5px 10px;
-                min-width: 200px;
-            }}
-        """
+        self.header = PageHeader("All Logs", "file-text", "Loading...")
+        self.counter_label = self.header.subtitle_label
 
-    @staticmethod
-    def _refresh_style(p) -> str:
-        return f"""
-            QPushButton {{
-                background-color: {p.surface_alt};
-                color: {p.text};
-                border: 1px solid {p.scrollbar};
-                border-radius: 4px;
-                padding: 5px 10px;
-                font-size: 14px;
-            }}
-            QPushButton:hover {{ background-color: {p.scrollbar}; }}
-        """
-
-    def _create_header(self) -> QHBoxLayout:
-        header = QHBoxLayout()
-        
-        title_layout = QVBoxLayout()
-        title = QLabel("📋 All Logs")
-        title.setFont(QFont("Segoe UI", 16, QFont.Weight.Bold))
-        self.counter_label = QLabel("Loading...")
-        self.counter_label.setStyleSheet(
-            f"color: {_palette().text_muted}; font-size: 11px;"
-        )
-        
-        title_layout.addWidget(title)
-        title_layout.addWidget(self.counter_label)
-        header.addLayout(title_layout)
-        
-        header.addStretch()
-        
-        # Classification filter
-        self._filter_label = QLabel("Filter:")
-        self._filter_label.setStyleSheet(
-            f"color: {_palette().text_muted}; font-size: 12px;"
-        )
-        header.addWidget(self._filter_label)
-
-        self.class_filter = QComboBox()
-        self.class_filter.addItems(["All", "Alerts Only", "Benign Only"])
-        p = _palette()
-        self.class_filter.setStyleSheet(self._combo_style(p))
-        self.class_filter.currentTextChanged.connect(self._on_filter_changed)
-        header.addWidget(self.class_filter)
-
-        # Search box
-        self.search_box = QLineEdit()
-        self.search_box.setPlaceholderText("Search raw logs...")
-        self.search_box.setStyleSheet(self._search_style(p))
-        self.search_box.textChanged.connect(self._on_search_changed)
-        header.addWidget(self.search_box)
-
-        refresh_btn = QPushButton("🔄")
+        refresh_btn = icon_button("refresh", "Refresh logs")
         self._refresh_btn = refresh_btn
-        refresh_btn.setToolTip("Refresh logs")
-        refresh_btn.setStyleSheet(self._refresh_style(p))
         refresh_btn.clicked.connect(self.refresh)
-        header.addWidget(refresh_btn)
+        self.header.add_action(refresh_btn)
 
-        self.clear_btn = QPushButton("Clear logs")
-        self.clear_btn.setProperty("variant", "dangerOutline")
+        self.clear_btn = text_button("Clear logs", "trash", "dangerOutline", "danger")
         self.clear_btn.setToolTip("Permanently delete all analysed logs and their alerts")
         self.clear_btn.clicked.connect(self._on_clear_logs)
-        header.addWidget(self.clear_btn)
+        self.header.add_action(self.clear_btn)
+        box.addWidget(self.header)
 
-        return header
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(8)
+        self.search_box = QLineEdit()
+        self.search_box.setPlaceholderText("Search raw logs or classification")
+        self.search_box.setClearButtonEnabled(True)
+        from .icons import icon
+        self.search_box.addAction(
+            icon("search", "text_muted", 16), QLineEdit.ActionPosition.LeadingPosition
+        )
+        self.search_box.textChanged.connect(self._on_search_changed)
+        toolbar.addWidget(self.search_box, 1)
+
+        self._filter_label = QLabel("Show")
+        set_role(self._filter_label, "pageSubtitle")
+        toolbar.addWidget(self._filter_label)
+        self.class_filter = QComboBox()
+        self.class_filter.addItems(["All", "Alerts Only", "Benign Only"])
+        self.class_filter.currentTextChanged.connect(self._on_filter_changed)
+        toolbar.addWidget(self.class_filter)
+        box.addLayout(toolbar)
+        return box
 
     # ----- clear logs ----------------------------------------------------
 
@@ -269,10 +210,10 @@ class AllLogsView(QWidget):
             # We access the raw results to get all logs instead of alerts
             # get_latest_alerts() bypasses the alert-only filter
             results = self.bridge.get_latest_alerts(limit=50) # Get latest 50 batches
-            
+
             self._log_cache.clear()
             logs_data = []
-            
+
             for result in results:
                 # Assuming the controller sets `logs` list
                 if hasattr(result, 'logs'):
@@ -288,22 +229,22 @@ class AllLogsView(QWidget):
                         }
                         self._log_cache[lg.log_id] = log_dict
                         logs_data.append(log_dict)
-            
+
             self._update_counter(logs_data)
             self.clear_btn.setEnabled(bool(logs_data))
-            
+
             if not logs_data:
                 self.table.setRowCount(0)
                 self.empty_label.show()
                 self.table.hide()
                 return
-            
+
             self.empty_label.hide()
             self.table.show()
-            
+
             filtered = self._apply_filters(logs_data)
             self._update_table(filtered)
-            
+
         except Exception as e:
             import traceback
             traceback.print_exc()
@@ -330,35 +271,38 @@ class AllLogsView(QWidget):
                             }
                             self._log_cache[lg.log_id] = log_dict
                             new_logs.append(log_dict)
-            
+
             if new_logs:
                 all_logs = list(self._log_cache.values())
                 self._update_counter(all_logs)
                 filtered = self._apply_filters(all_logs)
                 self._update_table(filtered, True)
-                
+
         except Exception as e:
             import traceback
             traceback.print_exc()
 
     def _apply_filters(self, logs_data: list) -> list:
         filtered = logs_data
-        
+
         if self._current_filter == "Alerts Only":
             filtered = [l for l in filtered if l["is_alert"]]
         elif self._current_filter == "Benign Only":
             filtered = [l for l in filtered if not l["is_alert"]]
-            
+
         if self._search_text:
             text = self._search_text.lower()
             filtered = [l for l in filtered if text in l["raw_log"].lower() or text in l["classification"].lower()]
-            
+
         return filtered
 
     def _update_counter(self, logs_data: list):
         total = len(logs_data)
         alerts = sum(1 for l in logs_data if l["is_alert"])
-        self.counter_label.setText(f"Total: {total} │ Alerts: {alerts}")
+        self.counter_label.setText(
+            f"{total} log{'s' if total != 1 else ''}  \u00b7  "
+            f"{alerts} flagged as alerts"
+        )
 
     def _on_filter_changed(self, text: str):
         self._current_filter = text
@@ -376,7 +320,7 @@ class AllLogsView(QWidget):
         scroll_pos = self.table.verticalScrollBar().value() if preserve_scroll else 0
         self.table.setUpdatesEnabled(False)
         self.table.setRowCount(len(logs_data))
-        
+
         for row, lg in enumerate(logs_data):
             items = [
                 QTableWidgetItem(lg["time"]),
@@ -385,20 +329,16 @@ class AllLogsView(QWidget):
                 QTableWidgetItem(lg["raw_log"]),
                 QTableWidgetItem(lg["status"])
             ]
-            
+
+            p = _palette()
             for col, item in enumerate(items):
-                # Apply tooltips
                 item.setToolTip(item.text())
+                if col == 0:
+                    item.setForeground(QColor(p.text_muted))
+                if col == 3:
+                    item.setFont(self._mono)
                 self.table.setItem(row, col, item)
-            
-            # Color coding
-            color = (QColor(_palette().sev_critical) if lg["is_alert"]
-                     else QColor(_palette().text))
-            for col in range(5):
-                item = self.table.item(row, col)
-                if item:
-                    item.setForeground(color)
-                    
+
         self.table.setUpdatesEnabled(True)
         if preserve_scroll:
             self.table.verticalScrollBar().setValue(scroll_pos)

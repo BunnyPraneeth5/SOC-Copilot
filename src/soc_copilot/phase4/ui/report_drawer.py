@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
 from .report_format import report_mode, report_to_markdown
 from .theme import FONT_MD, ThemeManager, severity_color
 from .motion import show_toast, slide_open_width
+from .icons import icon_label, set_icon
 
 
 def _palette():
@@ -67,15 +68,18 @@ class ReportDrawer(QFrame):
         header = QWidget()
         header.setObjectName("drawerHeader")
         header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(14, 10, 10, 10)
-        title = QLabel("🔍 Investigation Report")
-        title.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
+        header_layout.setContentsMargins(16, 12, 10, 12)
+        header_layout.setSpacing(8)
+        header_layout.addWidget(icon_label("file-text", "accent", 18))
+        title = QLabel("Investigation report")
+        title.setStyleSheet("font-size: 14px; font-weight: 600;")
         self._title_label = title
         header_layout.addWidget(title)
         header_layout.addStretch()
-        self.close_btn = QPushButton("✕")
+        self.close_btn = QPushButton()
+        set_icon(self.close_btn, "x", "text_muted", 16)
         self.close_btn.setProperty("variant", "ghost")
-        self.close_btn.setFixedWidth(32)
+        self.close_btn.setFixedSize(30, 30)
         self.close_btn.setToolTip("Close (Esc)")
         self.close_btn.clicked.connect(self.close_drawer)
         header_layout.addWidget(self.close_btn)

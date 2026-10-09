@@ -1,20 +1,23 @@
 """Header status chips (UX-9).
 
-Five compact, clickable chips in the system status bar summarising the
-settings an analyst most often needs to check: online enrichment, the
-emergency kill switch, model integrity, threat-intel providers and model
-drift. Clicking a chip asks MainWindow to open Settings at that section.
+Compact, clickable chips in the header — the only place the app shows
+system status: pipeline, ingestion, online enrichment, the emergency kill
+switch, model integrity, threat-intel providers and model drift. Each has
+a coloured dot and a tooltip with details; clicking a chip asks
+MainWindow to open Settings at that section.
 
 ``chip_states`` is a pure function so the mapping from backend status to
 chip tone/text is testable without widgets.
 """
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import QHBoxLayout, QPushButton, QWidget
 
 from .theme import ThemeManager
 
-CHIP_ORDER = ("enrichment", "kill_switch", "integrity", "providers", "drift")
+CHIP_ORDER = ("pipeline", "ingestion", "enrichment", "kill_switch",
+              "integrity", "providers", "drift")
 
 # tone -> palette attribute for the chip's dot/border colour
 _TONE_COLOR = {
@@ -61,6 +64,38 @@ def _drift_state(drift) -> tuple:
     return (tone, f"Drift: {level.title()}", str(tip))
 
 
+def _pipeline_state(stats: dict, security: dict) -> tuple:
+    if not stats.get("pipeline_loaded"):
+        return ("warn", "Pipeline: Loading", "ML models are initialising.")
+    text_model = (security.get("text_log_model", {}) or {}).get("loaded")
+    lines = ["ML models loaded — ready for analysis",
+             "Text-log model: " + ("loaded" if text_model else "rules fallback")]
+    return ("good", "Pipeline: Active", "\n".join(lines))
+
+
+def _ingestion_state(stats: dict) -> tuple:
+    running = stats.get("running", False)
+    sources = stats.get("sources_count", 0)
+    dropped = stats.get("dropped_count", 0)
+    lines = [f"Sources: {sources}",
+             f"Buffer: {stats.get('size', 0)}/{stats.get('max_size', 10000)}"]
+    if dropped:
+        lines.append(f"Dropped: {dropped}")
+    suppressed = (stats.get("deduplication", {}) or {}).get("suppressed_count", 0)
+    if suppressed:
+        lines.append(f"Suppressed benign duplicates: {suppressed}")
+    if not (stats.get("permission_check", {}) or {}).get("has_permission", True):
+        lines.append("Permissions: Limited — run as admin for system logs")
+    tip = "\n".join(lines)
+    if stats.get("shutdown_flag"):
+        return ("warn", "Ingestion: Stopped", tip)
+    if running and sources > 0:
+        return ("warn" if dropped else "info", f"Ingestion: Active ({sources})", tip)
+    if sources > 0:
+        return ("neutral", f"Ingestion: Configured ({sources})", tip)
+    return ("neutral", "Ingestion: Not Started", tip)
+
+
 def chip_states(stats: dict, drift: dict | None = None,
                 providers: list | None = None) -> dict:
     """Map backend status to ``{chip: (tone, text, tooltip)}``."""
@@ -70,7 +105,10 @@ def chip_states(stats: dict, drift: dict | None = None,
     strict = bool(security.get("strict_model_integrity", False))
     integrity = security.get("model_integrity", {}) or {}
 
-    states = {}
+    states = {
+        "pipeline": _pipeline_state(stats, security),
+        "ingestion": _ingestion_state(stats),
+    }
     if online:
         states["enrichment"] = ("warn", "Enrichment: Online",
                                 "Online threat-intel lookups are enabled — "
@@ -121,26 +159,42 @@ class StatusChip(QPushButton):
 
     def set_state(self, tone: str, text: str, tooltip: str = "") -> None:
         self.tone = tone if tone in _TONE_COLOR else "neutral"
-        self.setText(f"● {text}")
+        self.setText(text)
         self.setToolTip(f"{tooltip}\n\nClick to open Settings".strip())
         self.setAccessibleName(text)
         self._restyle()
 
+    @staticmethod
+    def _dot(color: str) -> QIcon:
+        px = QPixmap(16, 16)
+        px.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(px)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(color))
+        painter.drawEllipse(4, 4, 8, 8)
+        painter.end()
+        return QIcon(px)
+
     def _restyle(self) -> None:
         p = ThemeManager.instance().palette
         color = getattr(p, _TONE_COLOR[self.tone])
+        self.setIcon(self._dot(color))
+        self.setIconSize(QSize(12, 12))
+        # Neutral outline; only problems get a coloured one
+        border = p.danger if self.tone == "bad" else p.surface_alt
         self.setStyleSheet(f"""
             QPushButton {{
                 color: {p.text};
                 background-color: {p.surface};
-                border: 1px solid {color};
-                border-radius: 10px;
-                min-height: 18px;
-                padding: 1px 10px;
+                border: 1px solid {border};
+                border-radius: 12px;
+                min-height: 22px;
+                padding: 0px 10px 0px 6px;
                 font-size: 11px;
             }}
-            QPushButton:hover {{ background-color: {p.surface_alt}; }}
-            QPushButton:focus {{ border: 2px solid {p.accent}; }}
+            QPushButton:hover {{ background-color: {p.surface_alt}; border-color: {p.border}; }}
+            QPushButton:focus {{ border: 1px solid {p.accent}; }}
         """)
 
 

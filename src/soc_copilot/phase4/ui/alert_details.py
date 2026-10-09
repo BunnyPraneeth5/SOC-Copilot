@@ -7,7 +7,9 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QColor
 
-from .theme import ThemeManager, severity_color, set_role
+from .theme import ThemeManager, severity_color, set_role, PAGE_MARGIN, PAGE_SPACING
+from .components import PageHeader, text_button, style_pill, status_color
+from .icons import icon_label, set_icon
 from ..controller.result_store import TRIAGE_STATUSES
 
 # Triage status → palette token (UX-5)
@@ -24,7 +26,7 @@ def _palette():
 
 
 class DetailField(QFrame):
-    """Styled detail field widget"""
+    """Card with an uppercase caption and a value."""
 
     def __init__(self, label: str, value: str, color: str | None = None):
         super().__init__()
@@ -34,24 +36,22 @@ class DetailField(QFrame):
             DetailField {{
                 background-color: {p.surface};
                 border: 1px solid {p.surface_alt};
-                border-radius: 6px;
-                padding: 8px;
+                border-radius: 8px;
             }}
         """)
-        
+
         layout = QVBoxLayout()
-        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setContentsMargins(14, 10, 14, 12)
         layout.setSpacing(4)
-        
+
         lbl = QLabel(label)
-        lbl.setStyleSheet(
-            f"color: {_palette().text_muted}; font-size: 10px; font-weight: bold;"
-        )
-        
+        set_role(lbl, "caption")
+
         val = QLabel(value)
-        val.setStyleSheet(f"color: {color}; font-size: 13px; font-weight: bold;")
+        val.setStyleSheet(f"color: {color}; font-size: 15px; font-weight: 600;")
         val.setWordWrap(True)
-        
+        val.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+
         layout.addWidget(lbl)
         layout.addWidget(val)
         self.setLayout(layout)
@@ -64,91 +64,72 @@ class AlertDetailsPanel(QWidget):
     investigate_requested = pyqtSignal(str)      # target IP
     filter_alerts_requested = pyqtSignal(str)    # IP
     show_logs_requested = pyqtSignal(str)        # IP
-    
+
     def __init__(self, bridge):
         super().__init__()
         self.bridge = bridge
         self._init_ui()
-    
+
     def _init_ui(self):
         layout = QVBoxLayout()
-        layout.setContentsMargins(15, 15, 15, 15)
-        layout.setSpacing(15)
-        
-        # Header with back button
-        header = QHBoxLayout()
-        
-        back_btn = QPushButton("← Back to Alerts")
+        layout.setContentsMargins(PAGE_MARGIN, PAGE_MARGIN, PAGE_MARGIN, PAGE_MARGIN)
+        layout.setSpacing(PAGE_SPACING)
+
+        self.header = PageHeader("Investigation", "search", "No alert selected")
+        self.title_label = self.header.title_label
+        back_btn = text_button("Back to alerts", "arrow-left")
         self._back_btn = back_btn
-        self._style_back_button()
+        back_btn.setToolTip("Back to Alerts (Esc)")
         back_btn.clicked.connect(self.back_clicked.emit)
-        header.addWidget(back_btn)
-        
-        header.addStretch()
-        
-        # Title
-        self.title_label = QLabel("🔍 Alert Investigation")
-        self.title_label.setFont(QFont("Segoe UI", 16, QFont.Weight.Bold))
-        header.addWidget(self.title_label)
-        
-        header.addStretch()
-        layout.addLayout(header)
-        
+        self.header.add_action(back_btn)
+        layout.addWidget(self.header)
+
         # Scroll area for details
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
         ThemeManager.instance().theme_changed.connect(self._apply_theme)
-        
+
         self.details_widget = QWidget()
         self.details_layout = QVBoxLayout()
+        self.details_layout.setContentsMargins(0, 0, 8, 0)
         self.details_layout.setSpacing(12)
         self.details_widget.setLayout(self.details_layout)
-        
+
         scroll.setWidget(self.details_widget)
         layout.addWidget(scroll)
-        
+
         self.setLayout(layout)
         self._last_show_args = None
         self._show_placeholder()
 
-    def _style_back_button(self):
-        self._back_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: transparent;
-                color: {_palette().accent};
-                border: 1px solid {_palette().accent};
-                border-radius: 4px;
-                padding: 8px 15px;
-                font-size: 12px;
-            }}
-            QPushButton:hover {{
-                background-color: {_palette().accent};
-                color: {_palette().text_inverse};
-            }}
-        """)
-
     def _apply_theme(self):
-        """Re-apply palette styles and re-render the current alert."""
-        self._style_back_button()
+        """Re-render the current alert with the new palette."""
         if self._last_show_args is not None:
             self.show_alert(*self._last_show_args)
         else:
             self._show_placeholder()
 
     def _show_placeholder(self):
-        """Show placeholder text"""
+        """Empty state: icon + hint."""
         self._clear_details()
-        
-        placeholder = QLabel(
-            "📋 No alert selected\n\n"
-            "Select an alert from the Alerts view to see detailed analysis"
-        )
-        placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        placeholder.setStyleSheet(
-            f"color: {_palette().text_muted}; font-size: 13px; padding: 40px;"
-        )
-        self.details_layout.addWidget(placeholder)
-    
+        self.header.set_subtitle("No alert selected")
+        box = QWidget()
+        v = QVBoxLayout(box)
+        v.setContentsMargins(0, 60, 0, 0)
+        v.setSpacing(10)
+        v.addWidget(icon_label("search", "text_muted", 36), 0, Qt.AlignmentFlag.AlignHCenter)
+        title = QLabel("No alert selected")
+        set_role(title, "sectionTitle")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hint = QLabel("Select an alert on the Alerts page to see its analysis.")
+        set_role(hint, "pageSubtitle")
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        v.addWidget(title)
+        v.addWidget(hint)
+        self.details_layout.addWidget(box)
+        self.details_layout.addStretch()
+
     def _clear_details(self):
         """Clear details panel"""
         while self.details_layout.count():
@@ -158,7 +139,7 @@ class AlertDetailsPanel(QWidget):
                 w.hide()
                 w.setParent(None)
                 w.deleteLater()
-    
+
     def show_alert(
         self,
         batch_id: str,
@@ -193,21 +174,21 @@ class AlertDetailsPanel(QWidget):
 
             if not alert:
                 return
-            
+
             self._clear_details()
-            
-            # Priority badge
-            priority_color = severity_color(alert.priority)
+
+            self.header.set_subtitle(f"Alert {alert.alert_id} \u00b7 batch {batch_id}")
+
+            # Classification + badges
+            class_label = QLabel(alert.classification)
+            class_label.setStyleSheet("font-size: 22px; font-weight: 600;")
+            class_label.setWordWrap(True)
+            self.details_layout.addWidget(class_label)
+
             priority_section = QHBoxLayout()
-            priority_badge = QLabel(f"  {alert.priority.upper()}  ")
-            priority_badge.setStyleSheet(f"""
-                background-color: {priority_color};
-                color: {_palette().text_inverse};
-                font-weight: bold;
-                font-size: 12px;
-                border-radius: 4px;
-                padding: 6px 12px;
-            """)
+            priority_section.setSpacing(8)
+            priority_badge = QLabel(alert.priority)
+            style_pill(priority_badge, severity_color(alert.priority))
             priority_section.addWidget(priority_badge)
 
             # Triage status badge + selector (UX-5)
@@ -215,6 +196,10 @@ class AlertDetailsPanel(QWidget):
             self._status_badge = QLabel()
             self._update_status_badge()
             priority_section.addWidget(self._status_badge)
+            priority_section.addSpacing(8)
+            status_caption = QLabel("Set status")
+            set_role(status_caption, "pageSubtitle")
+            priority_section.addWidget(status_caption)
             self._status_combo = QComboBox()
             self._status_combo.addItems(TRIAGE_STATUSES)
             current = self._get_alert_status(alert.alert_id)
@@ -225,29 +210,20 @@ class AlertDetailsPanel(QWidget):
                 self._on_status_combo_changed
             )
             priority_section.addWidget(self._status_combo)
-
             priority_section.addStretch()
             self.details_layout.addLayout(priority_section)
-            
-            # Classification header
-            class_label = QLabel(alert.classification)
-            class_label.setFont(QFont("Segoe UI", 18, QFont.Weight.Bold))
-            class_label.setStyleSheet(
-                f"color: {_palette().accent}; padding: 10px 0;"
-            )
-            class_label.setWordWrap(True)
-            self.details_layout.addWidget(class_label)
-            
+            self.details_layout.addSpacing(4)
+
             # Key metrics grid
             metrics_grid = QHBoxLayout()
             metrics_grid.setSpacing(10)
-            
+
             metrics_grid.addWidget(DetailField(
                 "CONFIDENCE",
                 f"{alert.confidence:.1%}",
                 self._get_confidence_color(alert.confidence)
             ))
-            
+
             metrics_grid.addWidget(DetailField(
                 "ANOMALY SCORE",
                 f"{alert.anomaly_score:.3f}",
@@ -261,14 +237,14 @@ class AlertDetailsPanel(QWidget):
                 _palette().sev_critical if alert.risk_score > 0.7
                 else _palette().sev_medium
             ))
-            
+
             self.details_layout.addLayout(metrics_grid)
-            
+
             # Network info if available
             if alert.source_ip or alert.destination_ip:
                 network_section = QHBoxLayout()
                 network_section.setSpacing(10)
-                
+
                 if alert.source_ip:
                     network_section.addWidget(
                         self._ip_field("SOURCE IP", alert.source_ip)
@@ -280,43 +256,36 @@ class AlertDetailsPanel(QWidget):
                             "DESTINATION IP", alert.destination_ip
                         )
                     )
-                
+
                 self.details_layout.addLayout(network_section)
-            
+
             # Metadata
             meta_section = QHBoxLayout()
             meta_section.setSpacing(10)
-            
+
             meta_section.addWidget(DetailField(
-                "ALERT ID",
-                alert.alert_id[:16] + "...",
-                _palette().text_muted
+                "ALERT ID", self._short(alert.alert_id), _palette().text_muted
             ))
 
             meta_section.addWidget(DetailField(
-                "BATCH ID",
-                batch_id[:16] + "...",
-                _palette().text_muted
+                "BATCH ID", self._short(batch_id), _palette().text_muted
             ))
-            
+
             self.details_layout.addLayout(meta_section)
-            
-            # Reasoning section
-            self._add_section("🧠 Analysis Reasoning", alert.reasoning)
-            
-            # Suggested action
+
+            self._add_section("Analysis reasoning", alert.reasoning, "cpu")
             self._add_section(
-                "✅ Suggested Action", alert.suggested_action, _palette().success
+                "Suggested action", alert.suggested_action, "check-circle", "success"
             )
 
             # Analyst feedback
             self._add_feedback_section(alert)
 
             self.details_layout.addStretch()
-        
+
         except Exception as e:
             self._show_error(str(e))
-    
+
     def _get_confidence_color(self, confidence: float) -> str:
         """Get color based on confidence level"""
         p = _palette()
@@ -326,40 +295,50 @@ class AlertDetailsPanel(QWidget):
             return p.sev_medium
         return p.sev_high
 
-    def _add_section(self, title: str, content: str, accent_color: str | None = None):
-        accent_color = accent_color or _palette().accent
-        """Add content section"""
-        # Section header
+    @staticmethod
+    def _short(value: str, limit: int = 24) -> str:
+        value = str(value or "")
+        return value if len(value) <= limit else value[:limit] + "\u2026"
+
+    def _section_header(self, title: str, icon: str, token: str = "text_muted"):
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 12, 0, 2)
+        row.setSpacing(8)
+        row.addWidget(icon_label(icon, token, 16))
         header = QLabel(title)
-        header.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
-        header.setStyleSheet(f"color: {accent_color}; padding: 10px 0 5px 0;")
-        self.details_layout.addWidget(header)
-        
-        # Content box
-        content_frame = QFrame()
-        content_frame.setObjectName("sectionContent")
-        content_frame.setStyleSheet(f"""
-            QFrame#sectionContent {{
-                background-color: {_palette().surface};
-                border-left: 3px solid {accent_color};
-                border-radius: 4px;
-                padding: 12px;
+        set_role(header, "sectionTitle")
+        row.addWidget(header)
+        row.addStretch()
+        self.details_layout.addLayout(row)
+
+    def _card(self, name: str) -> QFrame:
+        frame = QFrame()
+        frame.setObjectName(name)
+        p = _palette()
+        frame.setStyleSheet(f"""
+            QFrame#{name} {{
+                background-color: {p.surface};
+                border: 1px solid {p.surface_alt};
+                border-radius: 8px;
             }}
         """)
-        
+        return frame
+
+    def _add_section(self, title: str, content: str, icon: str = "info",
+                     token: str = "text_muted"):
+        """Titled content card."""
+        self._section_header(title, icon, token)
+        content_frame = self._card("sectionContent")
         content_layout = QVBoxLayout()
-        content_layout.setContentsMargins(12, 12, 12, 12)
-        
-        content_label = QLabel(content)
+        content_layout.setContentsMargins(16, 14, 16, 14)
+        content_label = QLabel(content or "\u2014")
         content_label.setWordWrap(True)
-        content_label.setStyleSheet(
-            f"color: {_palette().text}; font-size: 12px; line-height: 1.5;"
-        )
+        content_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        content_label.setStyleSheet(f"color: {_palette().text}; font-size: 13px;")
         content_layout.addWidget(content_label)
-        
         content_frame.setLayout(content_layout)
         self.details_layout.addWidget(content_frame)
-    
+
     # ------------------------------------------------------------------
     # Analyst feedback (Phase-2 wiring)
     # ------------------------------------------------------------------
@@ -417,20 +396,11 @@ class AlertDetailsPanel(QWidget):
             return "New"
 
     def _update_status_badge(self):
-        p = _palette()
         status = self._get_alert_status(
             getattr(self, "_current_alert_id", "") or ""
         )
-        color = getattr(p, STATUS_TOKENS.get(status, "info"))
-        self._status_badge.setText(f"  {status}  ")
-        self._status_badge.setStyleSheet(f"""
-            background-color: {color};
-            color: {p.text_inverse};
-            font-weight: bold;
-            font-size: 11px;
-            border-radius: 4px;
-            padding: 4px 10px;
-        """)
+        self._status_badge.setText(status)
+        style_pill(self._status_badge, status_color(status))
         self._status_badge.setToolTip("Triage status")
 
     def _on_status_combo_changed(self, status: str):
@@ -463,26 +433,11 @@ class AlertDetailsPanel(QWidget):
 
     def _add_feedback_section(self, alert):
         """Add the analyst feedback controls for the shown alert."""
-        header = QLabel("🗳 Analyst Feedback")
-        header.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
-        header.setStyleSheet(
-            f"color: {_palette().accent}; padding: 10px 0 5px 0;"
-        )
-        self.details_layout.addWidget(header)
-
-        frame = QFrame()
-        frame.setObjectName("feedbackSection")
-        frame.setStyleSheet(f"""
-            QFrame#feedbackSection {{
-                background-color: {_palette().surface};
-                border-left: 3px solid {_palette().accent};
-                border-radius: 4px;
-                padding: 12px;
-            }}
-        """)
+        self._section_header("Analyst feedback", "message-square")
+        frame = self._card("feedbackSection")
         frame_layout = QVBoxLayout()
-        frame_layout.setContentsMargins(12, 12, 12, 12)
-        frame_layout.setSpacing(8)
+        frame_layout.setContentsMargins(16, 14, 16, 14)
+        frame_layout.setSpacing(10)
 
         self._feedback_history_label = QLabel("")
         self._feedback_history_label.setStyleSheet(
@@ -491,8 +446,11 @@ class AlertDetailsPanel(QWidget):
         frame_layout.addWidget(self._feedback_history_label)
 
         buttons_row = QHBoxLayout()
-        self._accept_button = QPushButton("Accept (true positive)")
-        self._reject_button = QPushButton("Reject (false positive)")
+        buttons_row.setSpacing(8)
+        self._accept_button = QPushButton(" Accept (true positive)")
+        set_icon(self._accept_button, "thumbs-up", "success")
+        self._reject_button = QPushButton(" Reject (false positive)")
+        set_icon(self._reject_button, "thumbs-down", "danger")
         self._accept_button.clicked.connect(
             lambda _c=False: self._submit_feedback(alert.alert_id, "accept")
         )
@@ -506,7 +464,8 @@ class AlertDetailsPanel(QWidget):
         reclassify_row = QHBoxLayout()
         self._reclassify_combo = QComboBox()
         self._reclassify_combo.addItems(self._FEEDBACK_CLASSES)
-        self._reclassify_button = QPushButton("Reclassify")
+        self._reclassify_button = QPushButton(" Reclassify")
+        set_icon(self._reclassify_button, "edit")
         self._reclassify_button.clicked.connect(
             lambda _c=False: self._submit_feedback(
                 alert.alert_id,
@@ -514,7 +473,7 @@ class AlertDetailsPanel(QWidget):
                 label=self._reclassify_combo.currentText(),
             )
         )
-        reclassify_row.addWidget(self._reclassify_combo)
+        reclassify_row.addWidget(self._reclassify_combo, 1)
         reclassify_row.addWidget(self._reclassify_button)
         frame_layout.addLayout(reclassify_row)
 
@@ -590,7 +549,7 @@ class AlertDetailsPanel(QWidget):
     def _show_error(self, error: str):
         """Show error state"""
         self._clear_details()
-        error_label = QLabel(f"❌ Error loading alert details:\n{error}")
+        error_label = QLabel(f"Error loading alert details:\n{error}")
         error_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         error_label.setStyleSheet(
             f"color: {_palette().sev_critical}; padding: 40px;"

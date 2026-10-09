@@ -1,30 +1,27 @@
-"""SOC Dashboard - Zones A-F Architecture
+"""SOC Dashboard page
 
-Zone A: Threat Level Banner (primary indicator)
-Zone B: System Status Strip (Pipeline/Ingestion/Governance consolidated)
-Zone C: Metric Cards Row (secondary metrics)
-Zone D: Quick Actions Bar
-Zone E: Recent Alerts Timeline (replaces activity feed)
-Zone F: Footer Status
+- Page header with the primary actions (Upload logs, Refresh)
+- Threat level banner
+- Metric cards (total / critical / high / medium / low)
+- Recent alerts table
+
+System status lives only in the header chips (MainWindow), so it is not
+repeated here.
 """
 
-from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
-    QPushButton, QFileDialog, QTableWidget, QTableWidgetItem,
-    QProgressBar
-)
-from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
-from PyQt6.QtGui import QFont, QColor
 from datetime import datetime
 
-from .state_constants import (
-    get_pipeline_state, get_ingestion_state, get_governance_state,
-    format_ingestion_label,
-    PIPELINE_STATES, INGESTION_STATES, GOVERNANCE_STATES,
-    PipelineState, IngestionState, GovernanceState
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor
+from PyQt6.QtWidgets import (
+    QFileDialog, QFrame, QHBoxLayout, QHeaderView, QLabel, QProgressBar,
+    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
-from .theme import ThemeManager, severity_color, set_role
+
+from .components import PageHeader, severity_delegate, style_table, text_button
+from .icons import ICONS, icon_label, set_icon
 from .motion import count_to
+from .theme import PAGE_MARGIN, PAGE_SPACING, ThemeManager, set_role
 
 
 def _palette():
@@ -34,7 +31,6 @@ def _palette():
 class FileProcessingWorker(QThread):
     """Worker thread for processing uploaded log files without blocking the UI."""
 
-    # Signals to communicate with the main thread
     progress = pyqtSignal(int, int)       # (current_file_index, total_files)
     file_done = pyqtSignal(str, bool)     # (filepath, success)
     all_done = pyqtSignal(int, int)       # (success_count, total_count)
@@ -72,34 +68,39 @@ class FileProcessingWorker(QThread):
 
 
 class ThreatBanner(QFrame):
-    """Zone A: Primary threat level indicator"""
-    
+    """Threat level: tinted card with an accent edge, icon and summary."""
+
+    # level -> (palette token, icon, title)
+    LEVELS = {
+        "loading": ("text_muted", "clock", "Loading"),
+        "critical": ("sev_critical", "alert-octagon", "Critical threat level"),
+        "high": ("sev_high", "alert-triangle", "High threat level"),
+        "elevated": ("sev_medium", "alert-circle", "Elevated threat level"),
+        "normal": ("success", "check-circle", "Normal"),
+    }
+
     def __init__(self):
         super().__init__()
-        self.setFixedHeight(80)
+        self.setFixedHeight(72)
         self._init_ui()
-    
+
     def _init_ui(self):
         layout = QHBoxLayout()
-        layout.setContentsMargins(20, 15, 20, 15)
-        
-        self.icon_label = QLabel("✅")
-        self.icon_label.setFont(QFont("Segoe UI Emoji", 32))
+        layout.setContentsMargins(20, 12, 20, 12)
+        layout.setSpacing(14)
+
+        self.icon_label = QLabel()
+        self.icon_label.setFixedSize(26, 26)
         layout.addWidget(self.icon_label)
-        
+
         text_layout = QVBoxLayout()
         text_layout.setSpacing(2)
-        
-        self.level_label = QLabel("NORMAL")
-        self.level_label.setFont(QFont("Segoe UI", 18, QFont.Weight.Bold))
-        
+        self.level_label = QLabel("Normal")
+        set_role(self.level_label, "sectionTitle")
         self.detail_label = QLabel("No critical threats detected")
-        self.detail_label.setFont(QFont("Segoe UI", 11))
-        set_role(self.detail_label, "muted")
-        
+        set_role(self.detail_label, "pageSubtitle")
         text_layout.addWidget(self.level_label)
         text_layout.addWidget(self.detail_label)
-        
         layout.addLayout(text_layout)
         layout.addStretch()
 
@@ -115,206 +116,127 @@ class ThreatBanner(QFrame):
         """Update threat level"""
         self._level_args = (level, critical, high)
         p = _palette()
-        levels = {
-            "loading": (p.surface, p.text_muted, "⏳", "LOADING"),
-            "critical": (p.danger_bg, p.sev_critical, "🚨", "CRITICAL"),
-            "high": (p.warning_bg, p.sev_high, "⚠️", "HIGH"),
-            "elevated": (p.warning_bg, p.sev_medium, "⚡", "ELEVATED"),
-            "normal": (p.success_bg, p.success, "●", "NORMAL")
-        }
-        
-        bg, fg, icon, text = levels.get(level, levels["normal"])
-        
+        token, icon, title = self.LEVELS.get(level, self.LEVELS["normal"])
+        accent = getattr(p, token)
+
         self.setStyleSheet(f"""
             ThreatBanner {{
-                background-color: {bg};
-                border: 2px solid {fg};
-                border-radius: 10px;
+                background-color: {p.surface};
+                border: 1px solid {p.surface_alt};
+                border-left: 4px solid {accent};
+                border-radius: 8px;
             }}
         """)
-        
-        self.icon_label.setText(icon)
-        self.level_label.setText(text)
-        self.level_label.setStyleSheet(f"color: {fg};")
-        
+        set_icon(self.icon_label, icon, token, 26)
+        self.level_label.setText(title)
+        self.level_label.setStyleSheet(f"color: {accent};")
+
         if level == "loading":
             self.detail_label.setText("Loading threat analysis...")
         elif critical > 0:
-            self.detail_label.setText(f"{critical} critical alerts require immediate attention")
+            self.detail_label.setText(
+                f"{critical} critical alert"
+                + (" needs" if critical == 1 else "s need")
+                + " immediate attention"
+            )
         elif high > 0:
-            self.detail_label.setText(f"{high} high-priority alerts detected")
+            self.detail_label.setText(
+                f"{high} high-priority alert{'s' if high != 1 else ''} detected"
+            )
         else:
             self.detail_label.setText("Routine activity only")
 
 
-class SystemStatusStrip(QFrame):
-    """Zone B: Consolidated system status"""
-    
-    def __init__(self):
-        super().__init__()
-        self.setFixedHeight(40)
-        self._separators = []
-        self._init_ui()
-        ThemeManager.instance().theme_changed.connect(self._apply_theme)
-
-    def _apply_theme(self):
-        p = _palette()
-        self.setStyleSheet(f"""
-            SystemStatusStrip {{
-                background-color: {p.surface};
-                border-bottom: 1px solid {p.surface_alt};
-            }}
-        """)
-        for sep in self._separators:
-            sep.setStyleSheet(f"color: {p.scrollbar};")
-
-    def _init_ui(self):
-        self._apply_theme()
-
-        layout = QHBoxLayout()
-        layout.setContentsMargins(20, 0, 20, 0)
-
-        self.pipeline_label = QLabel("Pipeline: Loading...")
-        self.ingestion_label = QLabel("Ingestion: Idle")
-        self.governance_label = QLabel("Governance: OK")
-
-        for lbl in [self.pipeline_label, self.ingestion_label, self.governance_label]:
-            lbl.setFont(QFont("Segoe UI", 10))
-            set_role(lbl, "muted")
-            layout.addWidget(lbl)
-            layout.addWidget(self._separator())
-
-        layout.addStretch()
-
-        self.timestamp_label = QLabel("")
-        self.timestamp_label.setFont(QFont("Segoe UI", 9))
-        set_role(self.timestamp_label, "muted")
-        layout.addWidget(self.timestamp_label)
-        
-        self.setLayout(layout)
-    
-    def _separator(self):
-        sep = QLabel("|")
-        sep.setStyleSheet(f"color: {_palette().scrollbar};")
-        self._separators.append(sep)
-        return sep
-    
-    def update_status(self, pipeline: bool, sources: int, running: bool, killswitch: bool):
-        """Update all status indicators using centralized state mappings"""
-        # Pipeline
-        pipeline_state = get_pipeline_state(pipeline)
-        pipeline_cfg = PIPELINE_STATES[pipeline_state]
-        self.pipeline_label.setText(f"Pipeline: {pipeline_cfg.icon} {pipeline_cfg.label}")
-        self.pipeline_label.setStyleSheet(f"color: {pipeline_cfg.color};")
-        
-        # Ingestion
-        ingestion_state = get_ingestion_state(running, sources, killswitch)
-        ingestion_cfg = INGESTION_STATES[ingestion_state]
-        ingestion_label = format_ingestion_label(ingestion_state, sources)
-        self.ingestion_label.setText(f"Ingestion: {ingestion_cfg.icon} {ingestion_label}")
-        self.ingestion_label.setStyleSheet(f"color: {ingestion_cfg.color};")
-        
-        # Governance
-        governance_state = get_governance_state(killswitch, True)
-        governance_cfg = GOVERNANCE_STATES[governance_state]
-        self.governance_label.setText(f"Governance: {governance_cfg.icon} {governance_cfg.label}")
-        self.governance_label.setStyleSheet(f"color: {governance_cfg.color};")
-        
-        # Timestamp
-        self.timestamp_label.setText(datetime.now().strftime("%H:%M:%S"))
-
-
 class MetricCard(QFrame):
-    """Individual metric card"""
-    
+    """Clickable metric: icon + label, large neutral value, coloured edge."""
+
     clicked = pyqtSignal(str)
-    
+
     def __init__(self, title: str, icon: str, color: str):
         super().__init__()
         self.title = title
-        self.color = color
-        self.setFixedHeight(90)
+        self.color = color  # palette token or colour value
+        self.icon_name = icon if icon in ICONS else "activity"
+        self.setFixedHeight(92)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._init_ui(title, icon, color)
+        self._init_ui(title)
         ThemeManager.instance().theme_changed.connect(self._apply_theme)
+
+    def _resolved_color(self) -> str:
+        return getattr(_palette(), self.color, self.color)
 
     def _apply_theme(self):
         p = _palette()
         self.setStyleSheet(f"""
             MetricCard {{
                 background-color: {p.surface};
-                border-left: 4px solid {self.color};
-                border-radius: 6px;
+                border: 1px solid {p.surface_alt};
+                border-top: 3px solid {self._resolved_color()};
+                border-radius: 8px;
             }}
             MetricCard:hover {{
-                background-color: {p.surface_alt};
+                border-color: {p.border};
+                border-top: 3px solid {self._resolved_color()};
             }}
         """)
-        if getattr(self, "value_label", None) is not None:
-            self.value_label.setStyleSheet(f"color: {self.color};")
 
-    def _init_ui(self, title: str, icon: str, color: str):
+    def _init_ui(self, title: str):
         self._apply_theme()
-        
+
         layout = QVBoxLayout()
-        layout.setContentsMargins(15, 10, 15, 10)
-        layout.setSpacing(5)
-        
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(6)
+
         header = QHBoxLayout()
-        icon_lbl = QLabel(icon)
-        icon_lbl.setFont(QFont("Segoe UI Emoji", 12))
-        header.addWidget(icon_lbl)
-        
+        header.setSpacing(8)
+        header.addWidget(icon_label(self.icon_name, self.color, 16))
         title_lbl = QLabel(title)
-        title_lbl.setFont(QFont("Segoe UI", 10))
-        set_role(title_lbl, "muted")
+        set_role(title_lbl, "pageSubtitle")
         header.addWidget(title_lbl)
         header.addStretch()
-        
+
         self.value_label = QLabel("0")
-        self.value_label.setFont(QFont("Segoe UI", 24, QFont.Weight.Bold))
-        self.value_label.setStyleSheet(f"color: {self.color};")
-        
+        self.value_label.setStyleSheet("font-size: 26px; font-weight: 600;")
+
         layout.addLayout(header)
         layout.addWidget(self.value_label)
         layout.addStretch()
-        
         self.setLayout(layout)
-    
+
     def set_value(self, value: int):
         count_to(self.value_label, int(value))
-    
+
     def mousePressEvent(self, event):
         self.clicked.emit(self.title)
 
 
 class MetricCardsRow(QFrame):
-    """Zone C: Metric cards"""
-    
+    """Metric cards"""
+
     card_clicked = pyqtSignal(str)
-    
+
     def __init__(self):
         super().__init__()
         self._init_ui()
-    
+
     def _init_ui(self):
         layout = QHBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(15)
-        
-        p = _palette()
-        self.total_card = MetricCard("Total Alerts", "📊", p.info)
-        self.critical_card = MetricCard("Critical", "🚨", p.sev_critical)
-        self.high_card = MetricCard("High", "⚠️", p.sev_high)
-        self.medium_card = MetricCard("Medium", "📋", p.sev_medium)
-        self.low_card = MetricCard("Low", "✓", p.success)
-        
-        for card in [self.total_card, self.critical_card, self.high_card, self.medium_card, self.low_card]:
+        layout.setSpacing(12)
+
+        self.total_card = MetricCard("Total Alerts", "bell", "accent")
+        self.critical_card = MetricCard("Critical", "alert-octagon", "sev_critical")
+        self.high_card = MetricCard("High", "alert-triangle", "sev_high")
+        self.medium_card = MetricCard("Medium", "alert-circle", "sev_medium")
+        self.low_card = MetricCard("Low", "info", "sev_low")
+
+        for card in [self.total_card, self.critical_card, self.high_card,
+                     self.medium_card, self.low_card]:
             card.clicked.connect(self.card_clicked.emit)
             layout.addWidget(card)
-        
+
         self.setLayout(layout)
-    
+
     def update_metrics(self, total: int, critical: int, high: int, medium: int, low: int):
         self.total_card.set_value(total)
         self.critical_card.set_value(critical)
@@ -323,69 +245,32 @@ class MetricCardsRow(QFrame):
         self.low_card.set_value(low)
 
 
-class QuickActionsBar(QFrame):
-    """Zone D: Quick action buttons"""
-    
+class QuickActionsBar(QWidget):
+    """Primary actions, shown in the page header."""
+
     upload_clicked = pyqtSignal()
     refresh_clicked = pyqtSignal()
-    
+
     def __init__(self):
         super().__init__()
-        self.setFixedHeight(60)
-        self._init_ui()
-        ThemeManager.instance().theme_changed.connect(self._apply_theme)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
 
-    def _apply_theme(self):
-        p = _palette()
-        self.upload_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {p.accent};
-                color: {p.text_inverse};
-                border: none;
-                padding: 12px 24px;
-                border-radius: 6px;
-                font-weight: bold;
-                font-size: 13px;
-            }}
-            QPushButton:hover {{ background-color: {p.accent_hover}; }}
-            QPushButton:disabled {{ background-color: {p.surface_alt}; color: {p.text_muted}; }}
-        """)
-        self.refresh_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {p.surface_alt};
-                color: {p.text};
-                border: none;
-                padding: 12px 24px;
-                border-radius: 6px;
-                font-size: 13px;
-            }}
-            QPushButton:hover {{ background-color: {p.scrollbar}; }}
-        """)
-
-    def _init_ui(self):
-        layout = QHBoxLayout()
-        layout.setContentsMargins(0, 10, 0, 10)
-        layout.setSpacing(10)
-
-        self.upload_btn = QPushButton("📁 Upload Logs")
+        self.refresh_btn = text_button("Refresh", "refresh")
+        self.refresh_btn.clicked.connect(self.refresh_clicked.emit)
+        self.upload_btn = text_button("Upload logs", "upload", "primary", "text_inverse")
         self.upload_btn.clicked.connect(self.upload_clicked.emit)
 
-        self.refresh_btn = QPushButton("🔄 Refresh")
-        self._apply_theme()
-        self.refresh_btn.clicked.connect(self.refresh_clicked.emit)
-        
-        layout.addWidget(self.upload_btn)
         layout.addWidget(self.refresh_btn)
-        layout.addStretch()
-        
-        self.setLayout(layout)
+        layout.addWidget(self.upload_btn)
 
 
 class RecentAlertsTimeline(QFrame):
-    """Zone E: Recent alerts (virtualized, max 10 rows)"""
-    
+    """Recent alerts (latest 10)"""
+
     alert_clicked = pyqtSignal(str, str)
-    
+
     def __init__(self):
         super().__init__()
         self._last_alerts = []
@@ -394,59 +279,50 @@ class RecentAlertsTimeline(QFrame):
 
     def _apply_theme(self):
         p = _palette()
-        if getattr(self, "count_label", None) is not None:
-            self.count_label.setStyleSheet(
-                f"color: {p.text_muted}; font-size: 11px;"
-            )
-            self.empty_label.setStyleSheet(
-                f"color: {p.text_muted}; padding: 40px;"
-            )
-            self.update_alerts(self._last_alerts)
+        self.empty_label.setStyleSheet(f"color: {p.text_muted}; padding: 40px;")
+        self.update_alerts(self._last_alerts)
 
     def _init_ui(self):
         layout = QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
-        
-        # Header
+
         header = QHBoxLayout()
-        title = QLabel("📋 Recent Alerts")
-        title.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
+        title = QLabel("Recent alerts")
+        set_role(title, "sectionTitle")
         header.addWidget(title)
         header.addStretch()
-        
         self.count_label = QLabel("0 alerts")
-        self.count_label.setStyleSheet(
-            f"color: {_palette().text_muted}; font-size: 11px;"
-        )
+        set_role(self.count_label, "pageSubtitle")
         header.addWidget(self.count_label)
-        
         layout.addLayout(header)
-        
-        # Table (virtualized to 10 rows max)
+
         self.table = QTableWidget()
         self.table.setColumnCount(5)
-        self.table.setHorizontalHeaderLabels(["Time", "Priority", "Classification", "Source", "Confidence"])
+        self.table.setHorizontalHeaderLabels(
+            ["Time", "Priority", "Classification", "Source", "Confidence"]
+        )
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.table.setMaximumHeight(350)  # ~10 rows
-        self.table.verticalHeader().setVisible(False)
-        self.table.horizontalHeader().setStretchLastSection(True)
+        style_table(self.table)
+        self.table.setItemDelegateForColumn(1, severity_delegate(self.table))
+        hdr = self.table.horizontalHeader()
+        hdr.setStretchLastSection(False)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        for col, width in ((0, 100), (1, 130), (3, 150), (4, 110)):
+            self.table.setColumnWidth(col, width)
         self.table.itemClicked.connect(self._on_row_clicked)
-        
+        self.table.setCursor(Qt.CursorShape.PointingHandCursor)
         layout.addWidget(self.table)
-        
-        # Empty state
-        self.empty_label = QLabel("No alerts • Upload logs to begin analysis")
+
+        self.empty_label = QLabel("No alerts yet. Upload logs to begin analysis.")
         self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.empty_label.setStyleSheet(
-            f"color: {_palette().text_muted}; padding: 40px;"
-        )
+        self.empty_label.setStyleSheet(f"color: {_palette().text_muted}; padding: 40px;")
         self.empty_label.hide()
         layout.addWidget(self.empty_label)
-        
+
         self.setLayout(layout)
-    
+
     def update_alerts(self, alerts_data: list):
         """Update with latest 10 alerts"""
         self._last_alerts = alerts_data
@@ -455,59 +331,49 @@ class RecentAlertsTimeline(QFrame):
             self.empty_label.show()
             self.count_label.setText("0 alerts")
             return
-        
+
         self.table.show()
         self.empty_label.hide()
-        
-        # Limit to 10 most recent
+
         recent = alerts_data[:10]
-        self.count_label.setText(f"{len(alerts_data)} alerts (showing {len(recent)})")
-        
+        self.count_label.setText(
+            f"Showing {len(recent)} of {len(alerts_data)}"
+        )
+
+        p = _palette()
         self.table.setUpdatesEnabled(False)
         self.table.setRowCount(len(recent))
-        
         for row, alert in enumerate(recent):
             items = [
                 QTableWidgetItem(alert["time"]),
                 QTableWidgetItem(alert["priority"]),
                 QTableWidgetItem(alert["classification"]),
-                QTableWidgetItem(alert["source_ip"]),
-                QTableWidgetItem(alert["confidence"])
+                QTableWidgetItem(alert["source_ip"] or "N/A"),
+                QTableWidgetItem(alert["confidence"]),
             ]
-            
             for col, item in enumerate(items):
-                # Store batch_id in first column using UserRole
                 if col == 0:
                     item.setData(Qt.ItemDataRole.UserRole, alert["batch_id"])
+                if col in (0, 4):
+                    item.setForeground(QColor(p.text_muted))
                 self.table.setItem(row, col, item)
-            
-            # Color by priority
-            color = self._get_priority_color(alert["priority"])
-            for col in range(5):
-                self.table.item(row, col).setForeground(color)
-        
         self.table.setUpdatesEnabled(True)
-        self.table.resizeColumnsToContents()
-    
-    def _get_priority_color(self, priority: str) -> QColor:
-        return QColor(severity_color(priority))
-    
+
     def _on_row_clicked(self, item):
         row = item.row()
-        # Retrieve batch_id from UserRole in first column
         batch_id = self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
         classification = self.table.item(row, 2).text()
         self.alert_clicked.emit(batch_id, classification)
 
 
 class Dashboard(QWidget):
-    """Main dashboard with Zones A-F"""
-    
+    """Dashboard page"""
+
     navigate_to_alerts = pyqtSignal()
     navigate_to_alerts_filtered = pyqtSignal(str)
     navigate_to_settings = pyqtSignal()
     alert_selected = pyqtSignal(str, str)
-    
+
     def __init__(self, bridge):
         super().__init__()
         self.bridge = bridge
@@ -534,45 +400,39 @@ class Dashboard(QWidget):
         if self._dirty:
             self._dirty = False
             self.refresh()
-    
+
     def _init_ui(self):
         layout = QVBoxLayout()
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(15)
-        
-        # Zone A: Threat Banner
-        self.threat_banner = ThreatBanner()
-        layout.addWidget(self.threat_banner)
-        
-        # Zone B: System Status
-        self.status_strip = SystemStatusStrip()
-        layout.addWidget(self.status_strip)
-        
-        # Zone C: Metrics
-        self.metrics_row = MetricCardsRow()
-        self.metrics_row.card_clicked.connect(self._on_metric_clicked)
-        layout.addWidget(self.metrics_row)
-        
-        # Zone D: Actions
+        layout.setContentsMargins(PAGE_MARGIN, PAGE_MARGIN, PAGE_MARGIN, PAGE_MARGIN)
+        layout.setSpacing(PAGE_SPACING)
+
+        self.header = PageHeader("Dashboard", "grid", "")
         self.actions_bar = QuickActionsBar()
         self.actions_bar.upload_clicked.connect(self._upload_logs)
         self.actions_bar.refresh_clicked.connect(self.refresh)
-        layout.addWidget(self.actions_bar)
-        
-        # Zone E: Recent Alerts
-        self.alerts_timeline = RecentAlertsTimeline()
-        self.alerts_timeline.alert_clicked.connect(self.alert_selected.emit)
-        layout.addWidget(self.alerts_timeline, 1)
-        
+        self.header.add_action(self.actions_bar)
+        layout.addWidget(self.header)
+
         # Progress bar for file uploads (hidden by default)
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
-        self.progress_bar.setFixedHeight(6)
+        self.progress_bar.setFixedHeight(4)
+        self.progress_bar.setTextVisible(False)
         self._style_progress_bar()
         layout.addWidget(self.progress_bar)
 
-        self.setLayout(layout)
+        self.threat_banner = ThreatBanner()
+        layout.addWidget(self.threat_banner)
 
+        self.metrics_row = MetricCardsRow()
+        self.metrics_row.card_clicked.connect(self._on_metric_clicked)
+        layout.addWidget(self.metrics_row)
+
+        self.alerts_timeline = RecentAlertsTimeline()
+        self.alerts_timeline.alert_clicked.connect(self.alert_selected.emit)
+        layout.addWidget(self.alerts_timeline, 1)
+
+        self.setLayout(layout)
         ThemeManager.instance().theme_changed.connect(self._style_progress_bar)
 
     def _style_progress_bar(self):
@@ -580,30 +440,30 @@ class Dashboard(QWidget):
         self.progress_bar.setStyleSheet(f"""
             QProgressBar {{
                 border: none;
-                border-radius: 3px;
-                background-color: {p.surface};
+                border-radius: 2px;
+                background-color: {p.surface_alt};
             }}
             QProgressBar::chunk {{
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 {p.accent}, stop:1 {p.success});
-                border-radius: 3px;
+                background-color: {p.accent};
+                border-radius: 2px;
             }}
         """)
 
+    def _set_updated(self, text: str | None = None):
+        self.header.set_subtitle(
+            text or f"Updated {datetime.now().strftime('%H:%M:%S')}"
+        )
+
     def refresh(self):
         """Unified refresh - single data fetch"""
-        # Show loading state
         self.threat_banner.set_level("loading", 0, 0)
-        
+
         try:
-            # Single data fetch
             results = self.bridge.get_latest_alerts(limit=100)
-            stats = self.bridge.get_stats()
-            
-            # Process alerts
+
             total = critical = high = medium = low = 0
             alerts_data = []
-            
+
             for result in results:
                 for alert in result.alerts:
                     total += 1
@@ -616,7 +476,7 @@ class Dashboard(QWidget):
                         medium += 1
                     elif "low" in p:
                         low += 1
-                    
+
                     alerts_data.append({
                         "batch_id": result.batch_id,
                         "time": alert.timestamp.strftime("%H:%M:%S") if hasattr(alert.timestamp, 'strftime') else str(alert.timestamp),
@@ -625,10 +485,9 @@ class Dashboard(QWidget):
                         "source_ip": getattr(alert, 'source_ip', 'N/A'),
                         "confidence": f"{alert.confidence:.2f}" if hasattr(alert, 'confidence') else "N/A"
                     })
-            
+
             self._alerts_cache = alerts_data
-            
-            # Update Zone A: Threat Banner
+
             if critical > 0:
                 self.threat_banner.set_level("critical", critical, high)
             elif high > 0:
@@ -637,24 +496,14 @@ class Dashboard(QWidget):
                 self.threat_banner.set_level("elevated", critical, high)
             else:
                 self.threat_banner.set_level("normal", critical, high)
-            
-            # Update Zone B: Status Strip
-            self.status_strip.update_status(
-                stats.get("pipeline_loaded", False),
-                stats.get("sources_count", 0),
-                stats.get("running", False),
-                stats.get("shutdown_flag", False)
-            )
-            
-            # Update Zone C: Metrics
+
             self.metrics_row.update_metrics(total, critical, high, medium, low)
-            
-            # Update Zone E: Alerts Timeline
             self.alerts_timeline.update_alerts(alerts_data)
-            
+            self._set_updated()
+
         except Exception:
             self.threat_banner.set_level("normal", 0, 0)
-    
+
     def _on_metric_clicked(self, card_title: str):
         """Handle metric card click"""
         priority_map = {
@@ -665,64 +514,61 @@ class Dashboard(QWidget):
             "Total Alerts": "all"
         }
         priority = priority_map.get(card_title, "all")
-        
+
         if priority == "all":
             self.navigate_to_alerts.emit()
         else:
             self.navigate_to_alerts_filtered.emit(priority)
-    
+
     def _upload_logs(self):
         """Upload and analyze log files asynchronously via worker thread."""
-        # Prevent overlapping uploads
         if self._worker is not None and self._worker.isRunning():
             return
-        
+
         files, _ = QFileDialog.getOpenFileNames(
             self, "Select Log Files", "",
             "Log Files (*.json *.jsonl *.csv *.log);;All (*.*)"
         )
-        
+
         if not files:
             return
-        
-        # Disable UI controls while processing
+
         self.actions_bar.upload_btn.setEnabled(False)
-        self.actions_bar.upload_btn.setText("⏳ Processing...")
+        self.actions_bar.upload_btn.setText(" Processing...")
         self.actions_bar.refresh_btn.setEnabled(False)
-        
-        # Show progress bar
+
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, len(files))
         self.progress_bar.setValue(0)
-        
-        # Create and start worker thread
+
         self._worker = FileProcessingWorker(self.bridge, files)
         self._worker.progress.connect(self._on_worker_progress)
         self._worker.all_done.connect(self._on_worker_done)
         self._worker.finished.connect(self._on_worker_finished)
         self._worker.start()
-    
+
     def _on_worker_progress(self, current, total):
         """Update progress bar from worker thread signal."""
         self.progress_bar.setValue(current)
-    
+
     def _on_worker_done(self, success_count, total_count):
         """Handle worker completion — refresh dashboard with new results."""
         self.bridge.start_ingestion()
         self.bridge.request_refresh()
         self.refresh()
-        self.status_strip.timestamp_label.setText(
-            f"Processed {success_count}/{total_count} files at {datetime.now().strftime('%H:%M:%S')}"
+        self._set_updated(
+            f"Processed {success_count}/{total_count} files at "
+            f"{datetime.now().strftime('%H:%M:%S')}"
         )
-    
+
     def _on_worker_finished(self):
         """Clean up worker reference, re-enable UI, and hide progress bar."""
         self.actions_bar.upload_btn.setEnabled(True)
-        self.actions_bar.upload_btn.setText("📁 Upload Logs")
+        self.actions_bar.upload_btn.setText(" Upload logs")
         self.actions_bar.refresh_btn.setEnabled(True)
         QTimer.singleShot(1000, self._hide_progress)
         self._worker = None
-    
+
     def _hide_progress(self):
         """Hide the progress bar after a short delay."""
         self.progress_bar.setVisible(False)

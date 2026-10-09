@@ -55,7 +55,7 @@ class AboutDialog(QDialog):
         
         # Beta disclaimer
         beta_label = QLabel(
-            "⚠ Beta Release — This is a pre-release version.\n"
+            "Beta release — this is a pre-release version.\n"
             "Features may change. Report issues on GitHub."
         )
         beta_label.setFont(QFont("Segoe UI", 9))
@@ -86,10 +86,8 @@ class AboutDialog(QDialog):
         
         # Features
         features = QLabel(
-            "✓ Fully Offline Operation\n"
-            "✓ Real-time Log Analysis\n"
-            "✓ Governance Controls\n"
-            "✓ SOC-Grade Security"
+            "Fully offline detection  ·  Real-time log analysis\n"
+            "Governance controls  ·  Analyst feedback loop"
         )
         features.setFont(QFont("Segoe UI", 10))
         features.setStyleSheet(f"color: {_palette().text};")

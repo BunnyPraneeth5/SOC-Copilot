@@ -103,7 +103,7 @@ class TestChipBar:
         bar = StatusChipBar()
         bar.update_states(chip_states(_stats(shutdown=True)))
         chip = bar.chips["kill_switch"]
-        assert chip.text() == "● Kill switch: ON"
+        assert chip.text() == "Kill switch: ON"
         assert chip.tone == "bad"
         assert "Click to open Settings" in chip.toolTip()
         destroy(bar)
@@ -122,8 +122,8 @@ class TestStatusBarIntegration:
         from soc_copilot.phase4.ui.system_status_bar import SystemStatusBar
         bar = SystemStatusBar(self._bridge(_stats(shutdown=True)))
         chips = bar.chip_bar.chips
-        assert chips["kill_switch"].text() == "● Kill switch: ON"
-        assert chips["drift"].text() == "● Drift: Moderate"
+        assert chips["kill_switch"].text() == "Kill switch: ON"
+        assert chips["drift"].text() == "Drift: Moderate"
         destroy(bar)
 
     def test_status_bar_relays_click(self, qapp):
