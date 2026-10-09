@@ -269,6 +269,15 @@ def build_stylesheet(p: Palette) -> str:
         color: {p.text_inverse};
         border: none;
     }}
+    QPushButton[variant="dangerOutline"] {{
+        background-color: transparent;
+        color: {p.danger};
+        border: 1px solid {p.danger};
+    }}
+    QPushButton[variant="dangerOutline"]:hover {{
+        background-color: {p.danger};
+        color: {p.text_inverse};
+    }}
     QPushButton[variant="ghost"] {{
         background-color: transparent;
         color: {p.text_muted};

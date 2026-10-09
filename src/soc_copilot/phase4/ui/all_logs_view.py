@@ -2,12 +2,13 @@
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem, 
-    QHeaderView, QLabel, QPushButton, QComboBox, QLineEdit
+    QHeaderView, QLabel, QPushButton, QComboBox, QLineEdit, QMessageBox
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont, QColor
 
 from .theme import ThemeManager
+from .motion import show_toast
 
 
 def _palette():
@@ -194,8 +195,74 @@ class AllLogsView(QWidget):
         refresh_btn.setStyleSheet(self._refresh_style(p))
         refresh_btn.clicked.connect(self.refresh)
         header.addWidget(refresh_btn)
-        
+
+        self.clear_btn = QPushButton("Clear logs")
+        self.clear_btn.setProperty("variant", "dangerOutline")
+        self.clear_btn.setToolTip("Permanently delete all analysed logs and their alerts")
+        self.clear_btn.clicked.connect(self._on_clear_logs)
+        header.addWidget(self.clear_btn)
+
         return header
+
+    # ----- clear logs ----------------------------------------------------
+
+    def _stored_counts(self) -> tuple:
+        """(logs, alerts) across every stored result, not just this page."""
+        try:
+            results = self.bridge.get_all_results()
+        except Exception:
+            results = None
+        if not isinstance(results, list):
+            return len(self._log_cache), 0
+        logs = sum(len(getattr(r, "logs", []) or []) for r in results)
+        alerts = sum(len(getattr(r, "alerts", []) or []) for r in results)
+        return logs, alerts
+
+    def _confirm_clear(self, logs: int, alerts: int) -> bool:
+        """Ask before deleting; Cancel is the default button."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Clear all logs?")
+        log_word = "log entry" if logs == 1 else "log entries"
+        alert_part = (
+            f" and the {alerts} alert{'s' if alerts != 1 else ''} found in them"
+            if alerts else ""
+        )
+        box.setText(
+            f"<b>This permanently deletes {logs} {log_word}{alert_part}.</b>"
+        )
+        box.setInformativeText(
+            "Cleared logs and alerts will not be shown again, including "
+            "their triage status. This cannot be undone.\n\n"
+            "Analyst feedback and the audit trail are kept."
+        )
+        clear = box.addButton("Clear logs", QMessageBox.ButtonRole.DestructiveRole)
+        clear.setProperty("variant", "danger")
+        cancel = box.addButton(QMessageBox.StandardButton.Cancel)
+        box.setDefaultButton(cancel)
+        box.setEscapeButton(cancel)
+        box.exec()
+        return box.clickedButton() is clear
+
+    def _on_clear_logs(self):
+        logs, alerts = self._stored_counts()
+        if logs == 0 and alerts == 0:
+            show_toast(self, "There are no logs to clear", "info")
+            return
+        if not self._confirm_clear(logs, alerts):
+            return
+        try:
+            removed = self.bridge.clear_logs(confirmed=True)
+        except Exception as exc:
+            QMessageBox.critical(self, "Clear failed", f"Could not clear logs:\n{exc}")
+            return
+        removed = removed if isinstance(removed, dict) else {"logs": logs, "alerts": alerts}
+        self.refresh()
+        message = f"Cleared {removed.get('logs', 0)} logs and {removed.get('alerts', 0)} alerts"
+        show_toast(self, message, "success")
+        window = self.window()
+        if hasattr(window, "statusBar"):
+            window.statusBar().showMessage(message, 5000)
 
     def refresh(self):
         try:
@@ -223,6 +290,7 @@ class AllLogsView(QWidget):
                         logs_data.append(log_dict)
             
             self._update_counter(logs_data)
+            self.clear_btn.setEnabled(bool(logs_data))
             
             if not logs_data:
                 self.table.setRowCount(0)
@@ -242,7 +310,10 @@ class AllLogsView(QWidget):
     def _incremental_refresh(self):
         try:
             results = self.bridge.get_latest_alerts(limit=10)
-            
+            if not results and self._log_cache:
+                self.refresh()  # store was cleared
+                return
+
             new_logs = []
             for result in results:
                 if hasattr(result, 'logs'):

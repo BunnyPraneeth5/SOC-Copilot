@@ -427,13 +427,19 @@ class AlertsView(QWidget):
                     status_changed = True
 
             new_alerts = []
+            current_keys = set()
             for result in results:
                 for i, alert in enumerate(result.alerts):
                     key = self._alert_key(result, i, alert)
+                    current_keys.add(key)
                     if key not in self._alert_cache:
                         alert_dict = self._alert_dict(result, alert, triage, i)
                         self._alert_cache[key] = alert_dict
                         new_alerts.append(alert_dict)
+
+            if set(self._alert_cache) - current_keys:
+                self.refresh()  # alerts removed (logs cleared / pruned)
+                return
 
             # Only update if there are new alerts or status changes
             if new_alerts or status_changed:

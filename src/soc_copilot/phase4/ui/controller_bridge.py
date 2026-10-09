@@ -326,6 +326,18 @@ class ControllerBridge(QObject):
         self._provider_check = None
         self.providersChecked.emit(result)
     
+    def clear_logs(self, *, confirmed: bool = False) -> dict:
+        """Permanently delete all analysed logs and the alerts in them.
+
+        The one destructive action the UI may take, so it is deliberately
+        narrow: the caller must pass ``confirmed=True`` after the analyst
+        confirmed, and the controller writes an audit record. Returns
+        ``{"logs": n, "alerts": m}`` removed.
+        """
+        if not confirmed:
+            raise PermissionError("clear_logs requires explicit confirmation")
+        return self._controller.clear_results(actor="analyst-ui")
+
     def get_total_alert_count(self) -> int:
         """Get total stored alert count"""
         return self._controller.result_store.count()

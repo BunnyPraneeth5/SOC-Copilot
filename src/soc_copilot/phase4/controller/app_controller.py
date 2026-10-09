@@ -1155,7 +1155,26 @@ class AppController:
             },
         }
     
-    def clear_results(self):
-        """Clear stored results"""
+    def clear_results(self, actor: str = "system") -> dict:
+        """Clear stored results (logs, their alerts and triage status).
+
+        Returns the number of logs and alerts removed. Feedback history
+        and the audit trail are separate stores and are kept.
+        """
+        results = self.result_store.get_all()
+        removed = {
+            "logs": sum(len(getattr(r, "logs", []) or []) for r in results),
+            "alerts": sum(len(r.alerts) for r in results),
+        }
         self.result_store.clear()
+        if self.audit_logger is not None:
+            try:
+                self.audit_logger.log_event(
+                    actor=actor,
+                    action="results_cleared",
+                    reason=f"logs={removed['logs']} alerts={removed['alerts']}",
+                )
+            except Exception as exc:  # noqa: BLE001 - audit must not break
+                logger.warning("clear_audit_failed", error=str(exc))
         self._notify_result_listeners(None)
+        return removed
