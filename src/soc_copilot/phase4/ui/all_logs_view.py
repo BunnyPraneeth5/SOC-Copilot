@@ -297,6 +297,10 @@ class AllLogsView(QWidget):
         self._search_text = text
         self._update_table(self._apply_filters(list(self._log_cache.values())))
 
+    def set_search_text(self, text: str):
+        """Set the search box programmatically (UX-7 'Show logs for IP')."""
+        self.search_box.setText(text)
+
     def _update_table(self, logs_data: list, preserve_scroll: bool = False):
         scroll_pos = self.table.verticalScrollBar().value() if preserve_scroll else 0
         self.table.setUpdatesEnabled(False)

@@ -59,8 +59,11 @@ class DetailField(QFrame):
 
 class AlertDetailsPanel(QWidget):
     """Enhanced alert details with navigation"""
-    
+
     back_clicked = pyqtSignal()
+    investigate_requested = pyqtSignal(str)      # target IP
+    filter_alerts_requested = pyqtSignal(str)    # IP
+    show_logs_requested = pyqtSignal(str)        # IP
     
     def __init__(self, bridge):
         super().__init__()
@@ -267,18 +270,16 @@ class AlertDetailsPanel(QWidget):
                 network_section.setSpacing(10)
                 
                 if alert.source_ip:
-                    network_section.addWidget(DetailField(
-                        "SOURCE IP",
-                        alert.source_ip,
-                        _palette().accent
-                    ))
+                    network_section.addWidget(
+                        self._ip_field("SOURCE IP", alert.source_ip)
+                    )
 
                 if alert.destination_ip:
-                    network_section.addWidget(DetailField(
-                        "DESTINATION IP",
-                        alert.destination_ip,
-                        _palette().accent
-                    ))
+                    network_section.addWidget(
+                        self._ip_field(
+                            "DESTINATION IP", alert.destination_ip
+                        )
+                    )
                 
                 self.details_layout.addLayout(network_section)
             
@@ -367,6 +368,41 @@ class AlertDetailsPanel(QWidget):
         "Benign", "DDoS", "BruteForce", "Malware", "Exfiltration",
         "Suspicious", "PrivilegeEscalation",
     ]
+
+    # ------------------------------------------------------------------
+    # IP context menu (UX-7)
+    # ------------------------------------------------------------------
+
+    def _ip_field(self, label: str, ip: str) -> "DetailField":
+        """DetailField for an IP with a right-click action menu."""
+        field = DetailField(label, ip, _palette().accent)
+        field.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        field.customContextMenuRequested.connect(
+            lambda pos, f=field, t=ip:
+                self._show_ip_menu(t, f.mapToGlobal(pos))
+        )
+        field.setToolTip("Right-click for actions")
+        return field
+
+    def _show_ip_menu(self, ip: str, global_pos):
+        """Per-IP actions shared with the alerts table (UX-7)."""
+        from PyQt6.QtWidgets import QMenu, QApplication
+
+        menu = QMenu(self)
+        menu.addAction("Investigate").triggered.connect(
+            lambda c=False, t=ip: self.investigate_requested.emit(t)
+        )
+        menu.addAction("Copy IP").triggered.connect(
+            lambda c=False, t=ip:
+                QApplication.clipboard().setText(t)
+        )
+        menu.addAction("Filter alerts by this IP").triggered.connect(
+            lambda c=False, t=ip: self.filter_alerts_requested.emit(t)
+        )
+        menu.addAction("Show logs for this IP").triggered.connect(
+            lambda c=False, t=ip: self.show_logs_requested.emit(t)
+        )
+        menu.exec(global_pos)
 
     # ------------------------------------------------------------------
     # Triage status (UX-5)

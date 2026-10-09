@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import QApplication
 
 from soc_copilot.phase4.controller.app_controller import AppController
 from soc_copilot.phase4.ui.controller_bridge import ControllerBridge
+from tests.qt_helpers import destroy
 
 
 SSHD_FAIL = (
@@ -109,7 +110,7 @@ class TestBridgeDebounce:
             QTest.qWait(50)
         QTest.qWait(300)  # let any extra fires land
         assert received == [1]
-        bridge.deleteLater()
+        destroy(bridge)
 
     def test_no_emit_without_activity(self, qapp, controller):
         bridge = ControllerBridge(controller)
@@ -117,7 +118,7 @@ class TestBridgeDebounce:
         bridge.resultsUpdated.connect(lambda: received.append(1))
         QTest.qWait(400)
         assert received == []
-        bridge.deleteLater()
+        destroy(bridge)
 
     def test_request_refresh_emits_immediately(self, qapp, controller):
         bridge = ControllerBridge(controller)
@@ -125,7 +126,7 @@ class TestBridgeDebounce:
         bridge.resultsUpdated.connect(lambda: received.append(1))
         bridge.request_refresh()
         assert received == [1]  # synchronous — no event loop wait needed
-        bridge.deleteLater()
+        destroy(bridge)
 
     def test_process_batch_triggers_signal(self, qapp, controller):
         bridge = ControllerBridge(controller)
@@ -134,12 +135,12 @@ class TestBridgeDebounce:
         controller.process_batch(_batch())
         QTest.qWait(500)
         assert received
-        bridge.deleteLater()
+        destroy(bridge)
 
     def test_mock_controller_without_listener_api(self, qapp):
         """Mocked controllers lacking add_result_listener must not break."""
         bridge = ControllerBridge(Mock(spec=object))
-        bridge.deleteLater()
+        destroy(bridge)
 
 
 # ---------------------------------------------------------------------------
@@ -159,24 +160,24 @@ class TestViewsEventDriven:
         bridge = ControllerBridge(controller)
         view = AlertsView(bridge)
         assert _active_poll_timers(view) == []
-        view.deleteLater()
-        bridge.deleteLater()
+        destroy(view)
+        destroy(bridge)
 
     def test_all_logs_view_no_poll_timer(self, qapp, controller):
         from soc_copilot.phase4.ui.all_logs_view import AllLogsView
         bridge = ControllerBridge(controller)
         view = AllLogsView(bridge)
         assert _active_poll_timers(view) == []
-        view.deleteLater()
-        bridge.deleteLater()
+        destroy(view)
+        destroy(bridge)
 
     def test_dashboard_no_poll_timer(self, qapp, controller):
         from soc_copilot.phase4.ui.dashboard_v2 import Dashboard
         bridge = ControllerBridge(controller)
         dash = Dashboard(bridge)
         assert _active_poll_timers(dash) == []
-        dash.deleteLater()
-        bridge.deleteLater()
+        destroy(dash)
+        destroy(bridge)
 
     def test_hidden_view_defers_then_refreshes_on_show(self, qapp, controller):
         from soc_copilot.phase4.ui.alerts_view import AlertsView
@@ -190,8 +191,8 @@ class TestViewsEventDriven:
         view.show()  # showEvent should refresh
         assert view._dirty is False
         view.refresh.assert_called_once()
-        view.deleteLater()
-        bridge.deleteLater()
+        destroy(view)
+        destroy(bridge)
 
     def test_mainwindow_single_status_timer(self, qapp, tmp_path):
         from soc_copilot.phase4.ui.main_window import MainWindow
@@ -206,7 +207,7 @@ class TestViewsEventDriven:
         # child status widgets no longer own polling timers
         assert getattr(w.sidebar, "poll_timer", None) is None
         assert getattr(w.system_status_bar, "poll_timer", None) is None
-        w.deleteLater()
+        destroy(w)
 
     def test_nav_switch_refreshes_target_page(self, qapp, tmp_path):
         from soc_copilot.phase4.ui.main_window import MainWindow
@@ -216,4 +217,4 @@ class TestViewsEventDriven:
         w.dashboard.refresh = Mock()
         w._on_nav_changed(0)
         w.dashboard.refresh.assert_called()
-        w.deleteLater()
+        destroy(w)

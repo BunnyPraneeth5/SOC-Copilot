@@ -381,11 +381,20 @@ class MainWindow(QMainWindow):
         # Page 1: Alerts
         self.alerts_view = AlertsView(self.bridge)
         self.alerts_view.alert_selected.connect(self._on_alert_selected)
+        self.alerts_view.show_logs_requested.connect(self._show_logs_for_ip)
         self.page_stack.addWidget(self.alerts_view)
         
         # Page 2: Investigation (Alert Details)
         self.details_panel = AlertDetailsPanel(self.bridge)
         self.details_panel.back_clicked.connect(lambda: self._on_nav_changed(1))
+        # Per-IP actions shared with the alerts table (UX-7)
+        self.details_panel.investigate_requested.connect(
+            self.alerts_view._trigger_investigation
+        )
+        self.details_panel.filter_alerts_requested.connect(
+            self._filter_alerts_by_ip
+        )
+        self.details_panel.show_logs_requested.connect(self._show_logs_for_ip)
         self.page_stack.addWidget(self.details_panel)
         
         # Page 3: Assistant
@@ -429,31 +438,139 @@ class MainWindow(QMainWindow):
         # Single consolidated status timer (UX-3): status-bar text,
         # sidebar indicators, system status bar/banners, and the
         # settings panel's status indicators all refresh together.
-        self.status_timer = QTimer()
+        self.status_timer = QTimer(self)  # parented: must not outlive the window
         self.status_timer.timeout.connect(self._update_status_widgets)
         self.status_timer.start(5000)
         
         # Keyboard shortcuts
         self._setup_shortcuts()
     
+    # Shortcuts documented in the F1 help dialog (UX-7)
+    SHORTCUTS_HELP = [
+        ("Ctrl+1..5", "Switch page (Dashboard / Alerts / Investigation / Logs / Settings)"),
+        ("Ctrl+F or /", "Focus alerts search"),
+        ("Ctrl+E", "Export alerts (CSV/JSON)"),
+        ("F5", "Refresh results"),
+        ("F1 or ?", "This help"),
+        ("Esc", "Close report / back to Alerts"),
+        ("J / K", "Next / previous alert row"),
+        ("Enter", "Open selected alert details"),
+        ("I", "Investigate selected alert's source IP"),
+        ("A / R", "Accept / Reject feedback on selected alert"),
+        ("1 / 2 / 3 / 4", "Set status New / In progress / Resolved / False positive"),
+    ]
+
+    @staticmethod
+    def _typing_in_editor() -> bool:
+        """True when focus is inside a text editor (guard for / and ?)."""
+        from PyQt6.QtWidgets import (
+            QApplication, QLineEdit, QTextEdit, QComboBox, QAbstractSpinBox,
+        )
+        w = QApplication.focusWidget()
+        return isinstance(w, (QLineEdit, QTextEdit, QComboBox,
+                              QAbstractSpinBox))
+
     def _setup_shortcuts(self):
-        """Setup keyboard shortcuts for navigation"""
+        """Setup keyboard shortcuts for navigation and actions (UX-7)."""
         from PyQt6.QtGui import QShortcut, QKeySequence
-        
-        # Navigation shortcuts
-        QShortcut(QKeySequence("Ctrl+1"), self).activated.connect(lambda: self._on_nav_changed(0))
-        QShortcut(QKeySequence("Ctrl+2"), self).activated.connect(lambda: self._on_nav_changed(1))
-        QShortcut(QKeySequence("Ctrl+3"), self).activated.connect(lambda: self._on_nav_changed(2))
-        QShortcut(QKeySequence("Ctrl+4"), self).activated.connect(lambda: self._on_nav_changed(3))
-        QShortcut(QKeySequence("Ctrl+5"), self).activated.connect(lambda: self._on_nav_changed(4))
-        QShortcut(QKeySequence("Ctrl+,"), self).activated.connect(lambda: self._on_nav_changed(5))
-        
-        # Refresh shortcut
-        QShortcut(QKeySequence("F5"), self).activated.connect(self._refresh_current_view)
-        
-        # Escape to return to dashboard
-        QShortcut(QKeySequence("Escape"), self).activated.connect(lambda: self._on_nav_changed(0))
+        ctx = Qt.ShortcutContext.WindowShortcut
+
+        # Page navigation (sidebar order; Assistant has no Ctrl+N).
+        # The File-menu actions show the key in their text instead of
+        # setShortcut() — a duplicate binding makes the key ambiguous and
+        # neither fires.
+        for key, page in (
+            ("Ctrl+1", 0), ("Ctrl+2", 1), ("Ctrl+3", 2),
+            ("Ctrl+4", 4), ("Ctrl+5", 5), ("Ctrl+,", 5),
+        ):
+            sc = QShortcut(QKeySequence(key), self, context=ctx)
+            sc.activated.connect(
+                lambda p=page: self._on_nav_changed(p)
+            )
+
+        # Focus alerts search
+        sc = QShortcut(QKeySequence("Ctrl+F"), self, context=ctx)
+        sc.activated.connect(self._focus_alerts_search)
+
+        # Refresh / export
+        sc = QShortcut(QKeySequence("F5"), self, context=ctx)
+        sc.activated.connect(self._on_f5)
+        sc = QShortcut(QKeySequence("Ctrl+E"), self, context=ctx)
+        sc.activated.connect(self._export_alerts)
+
+        # Escape: close drawer, else leave Investigation for Alerts
+        sc = QShortcut(QKeySequence("Escape"), self, context=ctx)
+        sc.activated.connect(self._on_escape)
+
+        # Help (F1 is a QShortcut; the menu item just displays it)
+        sc = QShortcut(QKeySequence("F1"), self, context=ctx)
+        sc.activated.connect(self._show_shortcuts_help)
+
+    def keyPressEvent(self, event):
+        """"/" → alerts search, "?" → help; editors consume these keys
+        before they reach the window, so no typing guard needed here."""
+        key = event.key()
+        if key == Qt.Key.Key_Slash:
+            self._on_nav_changed(1)
+            self.alerts_view.search_box.setFocus()
+            self.alerts_view.search_box.selectAll()
+            return
+        if key == Qt.Key.Key_Question:
+            self._show_shortcuts_help()
+            return
+        super().keyPressEvent(event)
+
+    def _focus_alerts_search(self):
+        if self._typing_in_editor():
+            return  # "/" typed into an editor stays a keystroke
+        self._on_nav_changed(1)
+        self.alerts_view.search_box.setFocus()
+        self.alerts_view.search_box.selectAll()
+
+    def _export_alerts(self):
+        self._on_nav_changed(1)
+        self.alerts_view._on_export()
+
+    def _on_escape(self):
+        if self.report_drawer.isVisible():
+            self.report_drawer.close_drawer()
+            return
+        if self.page_stack.currentIndex() == 2:
+            self._on_nav_changed(1)
+
+    def _show_shortcuts_help(self):
+        if self._typing_in_editor():
+            return
+        from PyQt6.QtWidgets import (
+            QDialog, QVBoxLayout, QGridLayout, QLabel,
+        )
+        p = _palette()
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Keyboard Shortcuts")
+        layout = QVBoxLayout()
+        grid = QGridLayout()
+        grid.setSpacing(8)
+        for i, (key, desc) in enumerate(self.SHORTCUTS_HELP):
+            k = QLabel(key)
+            k.setStyleSheet(f"color: {p.accent}; font-weight: bold;")
+            d = QLabel(desc)
+            d.setStyleSheet(f"color: {p.text};")
+            grid.addWidget(k, i, 0)
+            grid.addWidget(d, i, 1)
+        layout.addLayout(grid)
+        dlg.setLayout(layout)
+        dlg.setStyleSheet(f"background-color: {p.bg};")
+        dlg.exec()
     
+    def _on_f5(self):
+        """F5 refreshes through the bridge's result notification (UX-3)."""
+        try:
+            self.bridge.request_refresh()
+        except Exception:
+            self._refresh_current_view()
+            return
+        self.status_bar.showMessage("Refresh requested", 1000)
+
     def _refresh_current_view(self):
         """Refresh the currently active view"""
         current_index = self.page_stack.currentIndex()
@@ -492,6 +609,18 @@ class MainWindow(QMainWindow):
         
         self.status_bar.showMessage(f"Showing {priority.title()} priority alerts", 2000)
     
+    def _filter_alerts_by_ip(self, ip: str):
+        """Jump to Alerts filtered to an IP (UX-7)."""
+        self._on_nav_changed(1)
+        self.alerts_view.search_box.setText(ip)
+
+    def _show_logs_for_ip(self, ip: str):
+        """Jump to All Logs filtered to an IP (UX-7)."""
+        self._on_nav_changed(4)
+        setter = getattr(self.all_logs_view, "set_search_text", None)
+        if callable(setter):
+            setter(ip)
+
     def _on_alert_selected(self, batch_id: str, alert_identifier: str):
         """Handle alert selection - navigate to investigation.
 
@@ -600,23 +729,19 @@ class MainWindow(QMainWindow):
         file_menu = menubar.addMenu("&File")
         
         # Quick nav actions
-        nav_dash = QAction("📊 Dashboard", self)
-        nav_dash.setShortcut("Ctrl+1")
+        nav_dash = QAction("📊 Dashboard\tCtrl+1", self)
         nav_dash.triggered.connect(lambda: self._on_nav_changed(0))
         file_menu.addAction(nav_dash)
-        
-        nav_alerts = QAction("🚨 Alerts", self)
-        nav_alerts.setShortcut("Ctrl+2")
+
+        nav_alerts = QAction("🚨 Alerts\tCtrl+2", self)
         nav_alerts.triggered.connect(lambda: self._on_nav_changed(1))
         file_menu.addAction(nav_alerts)
-        
-        nav_logs = QAction("📋 All Logs", self)
-        nav_logs.setShortcut("Ctrl+5")
+
+        nav_logs = QAction("📋 All Logs\tCtrl+4", self)
         nav_logs.triggered.connect(lambda: self._on_nav_changed(4))
         file_menu.addAction(nav_logs)
-        
-        nav_settings = QAction("⚙️ Settings", self)
-        nav_settings.setShortcut("Ctrl+,")
+
+        nav_settings = QAction("⚙️ Settings\tCtrl+,", self)
         nav_settings.triggered.connect(lambda: self._on_nav_changed(5))
         file_menu.addAction(nav_settings)
         
@@ -629,6 +754,9 @@ class MainWindow(QMainWindow):
         
         # Help menu
         help_menu = menubar.addMenu("&Help")
+        shortcuts_action = QAction("&Keyboard shortcuts (F1)", self)
+        shortcuts_action.triggered.connect(self._show_shortcuts_help)
+        help_menu.addAction(shortcuts_action)
         about_action = QAction("&About SOC Copilot", self)
         about_action.triggered.connect(self._show_about)
         help_menu.addAction(about_action)

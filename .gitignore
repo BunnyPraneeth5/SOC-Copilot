@@ -123,3 +123,10 @@ test_logs.txt
 test_script.py
 test_ui_refresh.py
 sample_logs.jsonl
+
+# ========================
+# AI Agent Handoffs & Local Tool Config
+# ========================
+*_HANDOFF.md
+.agents/
+.claude/settings.local.json

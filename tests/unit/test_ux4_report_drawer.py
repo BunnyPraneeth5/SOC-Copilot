@@ -14,6 +14,7 @@ from soc_copilot.mcp.models import (
 from soc_copilot.phase4.ui.report_drawer import ReportDrawer
 from soc_copilot.phase4.ui.report_format import report_mode, report_to_markdown
 from soc_copilot.phase4.ui.theme import ThemeManager
+from tests.qt_helpers import destroy
 
 
 @pytest.fixture()
@@ -143,7 +144,7 @@ class TestReportFormat:
 def drawer(qapp):
     d = ReportDrawer()
     yield d
-    d.deleteLater()
+    destroy(d)
 
 
 class TestReportDrawer:
@@ -255,7 +256,7 @@ class TestReportDrawer:
             want = child.heightForWidth(child.width())
             if want > 0:
                 assert child.height() >= want
-        drawer.deleteLater()
+        destroy(drawer)
 
     def test_disabled_button_stylesheet(self, qapp):
         from soc_copilot.phase4.ui.theme import build_stylesheet, DARK, LIGHT
@@ -304,9 +305,9 @@ class TestAlertsViewIntegration:
 
         view._on_report_ready("9.9.9.9", None, Mock(message="oops"))
         assert drawer.stack.currentIndex() == 2
-        view.deleteLater()
-        drawer.deleteLater()
-        bridge.deleteLater()
+        destroy(view)
+        destroy(drawer)
+        destroy(bridge)
 
     def test_messagebox_fallback_without_drawer(self, qapp, tmp_path, monkeypatch):
         view, bridge = self._view(qapp, tmp_path)
@@ -317,8 +318,8 @@ class TestAlertsViewIntegration:
         )
         view._on_report_ready("45.67.89.101", _rich_report(), None)
         assert shown
-        view.deleteLater()
-        bridge.deleteLater()
+        destroy(view)
+        destroy(bridge)
 
     def test_mainwindow_has_drawer_in_splitter(self, qapp, tmp_path):
         from soc_copilot.phase4.controller.app_controller import AppController
@@ -333,4 +334,4 @@ class TestAlertsViewIntegration:
         # embedded widget: isVisible() needs shown ancestors; isHidden()
         # reflects the drawer's own visible state
         assert not w.report_drawer.isHidden()
-        w.deleteLater()
+        destroy(w)

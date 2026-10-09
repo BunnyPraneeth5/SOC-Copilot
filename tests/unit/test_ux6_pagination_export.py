@@ -14,6 +14,7 @@ from soc_copilot.phase4.ui.alert_export import (
     EXPORT_FIELDS, alerts_to_csv, alerts_to_json,
 )
 from soc_copilot.phase4.ui.alerts_view import AlertsView
+from tests.qt_helpers import destroy
 
 
 @pytest.fixture()
@@ -96,7 +97,7 @@ class TestPagination:
         assert view.table.rowCount() == 100
         assert view.page_label.text() == "Page 1 of 3 · showing 1–100 of 250"
         assert not view.prev_btn.isEnabled() and view.next_btn.isEnabled()
-        view.deleteLater()
+        destroy(view)
 
     def test_next_and_last_page(self, qapp):
         view, _ = _view_250(qapp)
@@ -109,14 +110,14 @@ class TestPagination:
         assert not view.next_btn.isEnabled()
         view.prev_btn.click()
         assert "101–200" in view.page_label.text()
-        view.deleteLater()
+        destroy(view)
 
     def test_page_size_change(self, qapp):
         view, _ = _view_250(qapp)
         view.page_size_combo.setCurrentText("200")
         assert view.table.rowCount() == 200
         assert "Page 1 of 2" in view.page_label.text()
-        view.deleteLater()
+        destroy(view)
 
     def test_filter_resets_page_and_counters(self, qapp):
         view, _ = _view_250(qapp)
@@ -127,7 +128,7 @@ class TestPagination:
         assert "Page 1 of 2" in view.page_label.text()
         assert "of 125" in view.page_label.text()
         assert "Total: 125" in view.counter_label.text()
-        view.deleteLater()
+        destroy(view)
 
     def test_one_action_button_per_page_row(self, qapp):
         view, _ = _view_250(qapp)
@@ -136,7 +137,7 @@ class TestPagination:
         view.prev_btn.click()
         btns = view.table.viewport().findChildren(QPushButton)
         assert len(btns) == view.table.rowCount() == 100
-        view.deleteLater()
+        destroy(view)
 
     def test_investigate_click_then_rebuild_no_crash(self, qapp):
         """btn.click() then a synchronous rebuild must not crash."""
@@ -147,7 +148,7 @@ class TestPagination:
         view.refresh()
         view._set_row_status(0, "Resolved")
         assert view.table.rowCount() == 100
-        view.deleteLater()
+        destroy(view)
 
 
 class TestExport:
@@ -163,7 +164,7 @@ class TestExport:
         rows = list(csv.reader(open(out, newline="", encoding="utf-8")))
         assert rows[0] == EXPORT_FIELDS
         assert len(rows) == 1 + 125  # all filtered rows, not just page 1
-        view.deleteLater()
+        destroy(view)
 
     def test_export_json(self, qapp, tmp_path, monkeypatch):
         view, _ = _view_250(qapp)
@@ -175,7 +176,7 @@ class TestExport:
         view._on_export()
         data = json.loads(out.read_text(encoding="utf-8"))
         assert len(data) == 250
-        view.deleteLater()
+        destroy(view)
 
     def test_export_cancel_no_file(self, qapp, monkeypatch):
         view, _ = _view_250(qapp)
@@ -184,4 +185,4 @@ class TestExport:
             lambda *a, **k: ("", ""),
         )
         view._on_export()  # must not raise
-        view.deleteLater()
+        destroy(view)

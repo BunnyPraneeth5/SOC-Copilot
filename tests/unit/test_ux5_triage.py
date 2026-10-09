@@ -17,6 +17,7 @@ from soc_copilot.phase4.controller.schemas import (
 )
 from soc_copilot.phase4.ui.alerts_view import AlertsView
 from soc_copilot.phase4.ui.controller_bridge import ControllerBridge
+from tests.qt_helpers import destroy
 
 
 @pytest.fixture()
@@ -195,7 +196,7 @@ class TestAlertsViewTriage:
         view.refresh()
         item = view.table.item(0, AlertsView.STATUS_COLUMN)
         assert item.text() == "In progress"
-        view.deleteLater(); bridge.deleteLater()
+        destroy(view); destroy(bridge)
 
     def test_open_filter_hides_resolved(self, qapp, tmp_path):
         view, bridge, ctrl = _view(qapp, tmp_path)
@@ -210,7 +211,7 @@ class TestAlertsViewTriage:
         assert (
             view.table.item(0, AlertsView.STATUS_COLUMN).text() == "Resolved"
         )
-        view.deleteLater(); bridge.deleteLater()
+        destroy(view); destroy(bridge)
 
     def test_status_filter_combines_with_priority(self, qapp, tmp_path):
         view, bridge, ctrl = _view(qapp, tmp_path)
@@ -222,7 +223,7 @@ class TestAlertsViewTriage:
         assert view.table.rowCount() == 1  # both match
         view.priority_filter.setCurrentText("Low")
         assert view.table.rowCount() == 0  # status matches, priority doesn't
-        view.deleteLater(); bridge.deleteLater()
+        destroy(view); destroy(bridge)
 
     def test_open_counter(self, qapp, tmp_path):
         view, bridge, ctrl = _view(qapp, tmp_path)
@@ -231,7 +232,7 @@ class TestAlertsViewTriage:
         ctrl.set_alert_status("ML-BBB", "False positive")
         view.refresh()
         assert "Open: 1" in view.counter_label.text()
-        view.deleteLater(); bridge.deleteLater()
+        destroy(view); destroy(bridge)
 
     def test_context_menu_sets_status(self, qapp, tmp_path):
         view, bridge, ctrl = _view(qapp, tmp_path)
@@ -239,14 +240,17 @@ class TestAlertsViewTriage:
         view.refresh()
         menu = view._build_row_context_menu(0)
         assert isinstance(menu, QMenu)
-        submenu = menu.actions()[0].menu()
+        submenu = next(
+            a.menu() for a in menu.actions()
+            if a.menu() and a.text() == "Set status"
+        )
         labels = [a.text() for a in submenu.actions()]
         assert labels == list(TRIAGE_STATUSES)
         submenu.actions()[2].trigger()  # "Resolved"
         assert ctrl.get_alert_status("ML-0001") == "Resolved"
         assert view.table.item(0, AlertsView.STATUS_COLUMN).text() == "Resolved"
-        menu.deleteLater()
-        view.deleteLater(); bridge.deleteLater()
+        destroy(menu)
+        destroy(view); destroy(bridge)
 
     def test_one_action_button_per_row(self, qapp, tmp_path):
         """Rebuilds must not leak cell widgets (UX-5 regression)."""
@@ -271,7 +275,7 @@ class TestAlertsViewTriage:
                 if col == AlertsView.ACTION_COLUMN:
                     continue
                 assert view.table.cellWidget(row, col) is None
-        view.deleteLater(); bridge.deleteLater()
+        destroy(view); destroy(bridge)
 
     def test_columns_after_insert(self, qapp, tmp_path):
         """Double-click + row click still hit the right columns/ids."""
@@ -290,7 +294,7 @@ class TestAlertsViewTriage:
         view.alert_selected.connect(lambda b, a: emitted.append(a))
         view._on_row_clicked(class_item)
         assert emitted == ["ML-0001"]
-        view.deleteLater(); bridge.deleteLater()
+        destroy(view); destroy(bridge)
 
 
 # ---------------------------------------------------------------------------
@@ -313,7 +317,7 @@ class TestDetailsPanelTriage:
         panel._status_combo.setCurrentText("Resolved")
         assert ctrl.get_alert_status("ML-0001") == "Resolved"
         assert panel._status_badge.text().strip() == "Resolved"
-        panel.deleteLater(); bridge.deleteLater()
+        destroy(panel); destroy(bridge)
 
     def test_feedback_reject_updates_badge(self, qapp, tmp_path):
         panel, bridge, ctrl = self._panel(qapp, tmp_path)
@@ -325,4 +329,4 @@ class TestDetailsPanelTriage:
         panel._submit_feedback("ML-0001", "reject")
         assert panel._status_badge.text().strip() == "False positive"
         assert panel._status_combo.currentText() == "False positive"
-        panel.deleteLater(); bridge.deleteLater()
+        destroy(panel); destroy(bridge)

@@ -6,7 +6,6 @@ from PyQt6.QtWidgets import (
     QFileDialog,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6 import sip
 from PyQt6.QtGui import QFont, QColor
 
 from datetime import datetime
@@ -23,6 +22,7 @@ class AlertsView(QWidget):
     """Scalable alerts table with filtering and incremental updates"""
     
     alert_selected = pyqtSignal(str, str)  # batch_id, alert_id
+    show_logs_requested = pyqtSignal(str)  # IP to look up in All Logs
     
     # Column configuration constants
     TIME_COLUMN = 0
@@ -146,6 +146,7 @@ class AlertsView(QWidget):
         self.table.verticalHeader().setDefaultSectionSize(32)  # Compact rows
         self.table.itemClicked.connect(self._on_row_clicked)
         self.table.itemDoubleClicked.connect(self._on_row_double_clicked)
+        self.table.installEventFilter(self)  # UX-7 vim-style keys
         
         # Performance: disable updates during batch operations
         self.table.setUpdatesEnabled(True)
@@ -327,6 +328,7 @@ class AlertsView(QWidget):
         # Search box
         self.search_box = QLineEdit()
         self.search_box.setPlaceholderText("Search...")
+        self.search_box.setToolTip("Search alerts (Ctrl+F or /)")
         self.search_box.setStyleSheet(self._search_style(p))
         self.search_box.textChanged.connect(self._on_search_changed)
         header.addWidget(self.search_box)
@@ -343,7 +345,7 @@ class AlertsView(QWidget):
         export_btn = QPushButton("Export…")
         self._export_btn = export_btn
         set_role(export_btn, "secondary")
-        export_btn.setToolTip("Export filtered alerts as CSV or JSON")
+        export_btn.setToolTip("Export filtered alerts as CSV or JSON (Ctrl+E)")
         export_btn.clicked.connect(self._on_export)
         header.addWidget(export_btn)
 
@@ -703,9 +705,8 @@ class AlertsView(QWidget):
             if widget is not None:
                 self.table.removeCellWidget(row, self.ACTION_COLUMN)
                 widget.hide()
-                # sip.delete destroys the C++ object NOW — a pending
-                # deleteLater() can outlive the repaint that caused it.
-                sip.delete(widget)
+                widget.setParent(None)  # detach from the viewport now
+                widget.deleteLater()
 
     def _set_row_data(self, row: int, alert: dict):
         """Set data for a single row - reusable method"""
@@ -853,18 +854,78 @@ class AlertsView(QWidget):
         if menu is not None:
             menu.exec(self.table.viewport().mapToGlobal(pos))
 
+    def _row_alert_dict(self, row: int) -> dict | None:
+        """Find the alert dict for a visible table row."""
+        class_item = self.table.item(row, self.CLASSIFICATION_COLUMN)
+        alert_id = (
+            class_item.data(Qt.ItemDataRole.UserRole)
+            if class_item is not None else None
+        )
+        if not alert_id:
+            return None
+        for cached in self._alert_cache.values():
+            if cached["alert_id"] == alert_id:
+                return cached
+        return None
+
+    def _add_ip_actions(self, menu, ip: str):
+        """Per-IP submenu shared with the details panel (UX-7)."""
+        sub = menu.addMenu(ip)
+        sub.addAction("Investigate").triggered.connect(
+            lambda c=False, t=ip: self._trigger_investigation(t)
+        )
+        sub.addAction("Copy IP").triggered.connect(
+            lambda c=False, t=ip: self._copy_to_clipboard(t)
+        )
+        sub.addAction("Filter alerts by this IP").triggered.connect(
+            lambda c=False, t=ip: self.search_box.setText(t)
+        )
+        sub.addAction("Show logs for this IP").triggered.connect(
+            lambda c=False, t=ip: self.show_logs_requested.emit(t)
+        )
+
+    def _copy_to_clipboard(self, text: str):
+        from PyQt6.QtWidgets import QApplication
+        QApplication.clipboard().setText(text)
+        self._status_msg(f"Copied {text}")
+
+    def _status_msg(self, msg: str):
+        window = self.window()
+        if hasattr(window, "statusBar"):
+            window.statusBar().showMessage(msg, 3000)
+
     def _build_row_context_menu(self, row: int):
-        """Row context menu; new actions (e.g. IP actions in UX-7) get
-        appended here."""
+        """Row context menu; new actions get appended here."""
         from PyQt6.QtWidgets import QMenu
 
         menu = QMenu(self)
+        alert = self._row_alert_dict(row)
+
+        # Per-IP actions (source / destination)
+        for label, ip in (
+            ("source", alert.get("source_ip") if alert else None),
+            ("destination", alert.get("destination_ip") if alert else None),
+        ):
+            if ip and str(ip).upper() != "N/A":
+                self._add_ip_actions(menu, ip)
+
         status_menu = menu.addMenu("Set status")
         for status in TRIAGE_STATUSES:
             action = status_menu.addAction(status)
             action.triggered.connect(
                 lambda checked=False, s=status, r=row:
                     self._set_row_status(r, s)
+            )
+
+        menu.addSeparator()
+        if alert:
+            menu.addAction("Copy alert ID").triggered.connect(
+                lambda c=False, t=alert["alert_id"]:
+                    self._copy_to_clipboard(t)
+            )
+            menu.addAction("Open details").triggered.connect(
+                lambda c=False, a=alert:
+                    self.alert_selected.emit(a["batch_id"], a["alert_id"])
             )
         return menu
 
@@ -894,6 +955,79 @@ class AlertsView(QWidget):
             item.setText(status)
             self._style_status_cell(row)
         self._update_counter(list(self._alert_cache.values()))
+
+    # ------------------------------------------------------------------
+    # Keyboard shortcuts (UX-7)
+    # ------------------------------------------------------------------
+
+    _STATUS_KEYS = {
+        Qt.Key.Key_1: "New",
+        Qt.Key.Key_2: "In progress",
+        Qt.Key.Key_3: "Resolved",
+        Qt.Key.Key_4: "False positive",
+    }
+
+    def eventFilter(self, watched, event):
+        """Vim-style shortcuts while the alerts table has focus."""
+        from PyQt6.QtCore import QEvent
+        if (
+            watched is self.table
+            and event.type() == QEvent.Type.KeyPress
+        ):
+            if self._handle_table_key(event.key()):
+                return True
+        return super().eventFilter(watched, event)
+
+    def _handle_table_key(self, key) -> bool:
+        row = self.table.currentRow()
+        if key == Qt.Key.Key_J:
+            self._move_row_selection(1)
+            return True
+        if key == Qt.Key.Key_K:
+            self._move_row_selection(-1)
+            return True
+        if row < 0:
+            return False
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            item = self.table.item(row, self.CLASSIFICATION_COLUMN)
+            if item is not None:
+                self._on_row_clicked(item)
+            return True
+        alert = self._row_alert_dict(row)
+        if key == Qt.Key.Key_I:
+            item = self.table.item(row, self.SOURCE_IP_COLUMN)
+            ip = item.text() if item else ""
+            if ip and ip.upper() != "N/A":
+                self._trigger_investigation(ip)
+            return True
+        if alert is None:
+            return False
+        if key == Qt.Key.Key_A:
+            self._row_feedback(alert, "accept")
+            return True
+        if key == Qt.Key.Key_R:
+            self._row_feedback(alert, "reject")
+            return True
+        status = self._STATUS_KEYS.get(key)
+        if status is not None:
+            self._set_row_status(row, status)
+            self._status_msg(f"Marked {alert['alert_id']} as {status}")
+            return True
+        return False
+
+    def _move_row_selection(self, delta: int):
+        row = self.table.currentRow() + delta
+        if 0 <= row < self.table.rowCount():
+            self.table.setCurrentCell(row, 0)
+            self.table.selectRow(row)
+
+    def _row_feedback(self, alert: dict, action: str):
+        """Submit accept/reject feedback for the row's alert (UX-5 link)."""
+        try:
+            self.bridge.submit_feedback(alert["alert_id"], action)
+            self._status_msg(f"Feedback '{action}' for {alert['alert_id']}")
+        except Exception as exc:
+            self._status_msg(f"Feedback failed: {exc}")
 
     def _find_rows_by_ip(self, ip: str) -> list[int]:
         """Scan the table to find all row indices matching the given IP address."""
