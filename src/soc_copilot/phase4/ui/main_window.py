@@ -400,6 +400,7 @@ class MainWindow(QMainWindow):
         
         # System status bar at top (consolidated)
         self.system_status_bar = SystemStatusBar(self.bridge)
+        self.system_status_bar.settings_requested.connect(self._open_settings_at)
         content_layout.addWidget(self.system_status_bar)
         
         # Banners
@@ -658,6 +659,11 @@ class MainWindow(QMainWindow):
         
         self.status_bar.showMessage(f"Showing {priority.title()} priority alerts", 2000)
     
+    def _open_settings_at(self, section: str):
+        """Header chip clicked: open Settings scrolled to that section."""
+        self._on_nav_changed(5)
+        self.config_panel.show_section(section)
+
     def _filter_alerts_by_ip(self, ip: str):
         """Jump to Alerts filtered to an IP (UX-7)."""
         self._on_nav_changed(1)

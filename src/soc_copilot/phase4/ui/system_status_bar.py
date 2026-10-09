@@ -1,11 +1,11 @@
 """System Status Bar - Consolidated Real-time Backend State Visualization
 
-Redesigned from 6 LEDs to 3 consolidated indicators:
+Two LED indicators with tooltip details:
 - Pipeline: ML model status
-- Ingestion: Log source and processing status  
-- Governance: Kill switch + permissions combined
+- Ingestion: Log source, processing and permission status
 
-With tooltip expansion for detailed information.
+followed by clickable status chips (UX-9) for enrichment, kill switch,
+model integrity, threat-intel providers and drift.
 """
 
 from PyQt6.QtWidgets import (
@@ -16,6 +16,7 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont, QColor
 
 from .theme import ThemeManager, set_role
+from .status_chips import StatusChipBar, chip_states
 
 
 def _palette():
@@ -117,20 +118,22 @@ class StatusIndicator(QWidget):
 
 
 class SystemStatusBar(QFrame):
-    """Consolidated status bar with 3 indicators (reduced from 6)
-    
-    Indicators:
-    1. Pipeline - ML model loading and active status
-    2. Ingestion - Log sources, processing, buffer status
-    3. Governance - Kill switch + permissions
-    """
-    
+    """Status bar: Pipeline + Ingestion LEDs and the UX-9 status chips."""
+
     status_update = pyqtSignal(dict)
-    
+    settings_requested = pyqtSignal(str)  # chip name -> open Settings there
+
     def __init__(self, bridge):
         super().__init__()
         self.bridge = bridge
+        self._probed_providers = None  # last "Check connectivity" result
         self._init_ui()
+        checked = getattr(bridge, "providersChecked", None)
+        if checked is not None and hasattr(checked, "connect"):
+            try:
+                checked.connect(self.set_probed_providers)
+            except TypeError:
+                pass  # Mock bridge attribute, not a signal
         # No own timer — refreshed by MainWindow's consolidated status timer
         self._update_status()
     
@@ -157,28 +160,13 @@ class SystemStatusBar(QFrame):
         # Separator
         layout.addWidget(self._separator())
         
-        # Governance indicator (combines old Kill Switch + Admin + Permissions LEDs)
-        self.governance_led = StatusIndicator("Governance")
-        layout.addWidget(self.governance_led)
+        # Status chips: enrichment, kill switch, integrity, providers, drift
+        self.chip_bar = StatusChipBar()
+        self.chip_bar.chip_clicked.connect(self.settings_requested.emit)
+        layout.addWidget(self.chip_bar)
 
-        # Separator
-        layout.addWidget(self._separator())
-
-        # Security indicator (model integrity + online enrichment)
-        self.security_led = StatusIndicator("Security")
-        layout.addWidget(self.security_led)
-        
         layout.addStretch()
-        
-        # Results count (compact)
-        self.results_label = QLabel("📊 0 results")
-        self.results_label.setFont(QFont("Segoe UI", 10))
-        set_role(self.results_label, "muted")
-        layout.addWidget(self.results_label)
-        
-        # Separator
-        layout.addWidget(self._separator())
-        
+
         # Last update time
         self.update_time = QLabel("")
         self.update_time.setFont(QFont("Segoe UI", 9))
@@ -255,6 +243,11 @@ class SystemStatusBar(QFrame):
             
             if dropped > 0:
                 ingestion_details.append(f"⚠️ Dropped: {dropped}")
+            permission_check = stats.get("permission_check", {})
+            if not permission_check.get("has_permission", True):
+                ingestion_details.append(
+                    "⚠️ Limited permissions — run as admin for system logs"
+                )
             dedup = stats.get("deduplication", {})
             suppressed = dedup.get("suppressed_count", 0)
             if suppressed:
@@ -273,61 +266,9 @@ class SystemStatusBar(QFrame):
                     "Upload logs to begin"
                 ])
             
-            # ─────────────────────────────────────────────────────────
-            # GOVERNANCE STATUS (combines kill switch + permissions)
-            # ─────────────────────────────────────────────────────────
-            shutdown = stats.get("shutdown_flag", False)
-            permission_check = stats.get("permission_check", {})
-            has_permission = permission_check.get("has_permission", True)
-            
-            governance_details = []
-            
-            if shutdown:
-                governance_details.append("🛑 Kill Switch: ACTIVE")
-                governance_details.append("All ML processing halted")
-                self.governance_led.set_state("red", "HALTED", governance_details)
-            elif not has_permission:
-                governance_details.append("Kill Switch: OFF")
-                governance_details.append("⚠️ Limited permissions")
-                governance_details.append("Run as admin for system logs")
-                self.governance_led.set_state("yellow", "Limited", governance_details)
-            else:
-                governance_details.append("Kill Switch: OFF")
-                governance_details.append("Full system access")
-                self.governance_led.set_state("green", "Active", governance_details)
+            # Status chips (UX-9)
+            self._update_chips(stats)
 
-            # Security status
-            security = stats.get("security", {})
-            integrity = security.get("model_integrity", {})
-            strict = security.get("strict_model_integrity", False)
-            online = security.get("online_enrichment_enabled", False)
-
-            security_details = [
-                f"Strict integrity: {'ON' if strict else 'OFF'}",
-                f"Online enrichment: {'ON' if online else 'OFF'}",
-            ]
-            if integrity.get("verified_files"):
-                security_details.append(
-                    f"Verified model files: {len(integrity.get('verified_files', []))}"
-                )
-            if integrity.get("error"):
-                security_details.append(str(integrity.get("error")))
-
-            if integrity.get("is_valid") is False:
-                self.security_led.set_state("red", "Check Failed", security_details)
-            elif strict and not online:
-                self.security_led.set_state("green", "Hardened", security_details)
-            elif online:
-                self.security_led.set_state("yellow", "Online TI", security_details)
-            else:
-                self.security_led.set_state("blue", "Dev Mode", security_details)
-            
-            # ─────────────────────────────────────────────────────────
-            # RESULTS COUNT
-            # ─────────────────────────────────────────────────────────
-            results_stored = stats.get("results_stored", 0)
-            self.results_label.setText(f"📊 {results_stored} results")
-            
             # Update time
             self.update_time.setText(datetime.now().strftime("%H:%M:%S"))
             
@@ -336,9 +277,33 @@ class SystemStatusBar(QFrame):
             
         except Exception as e:
             self.pipeline_led.set_state("red", "Error")
-            if hasattr(self, "security_led"):
-                self.security_led.set_state("gray", "Unknown")
             self.update_time.setText(f"Error: {str(e)[:15]}")
+
+    def _update_chips(self, stats: dict) -> None:
+        try:
+            drift = self.bridge.get_drift_status()
+        except Exception:
+            drift = None
+        providers = self._probed_providers
+        if providers is None:
+            try:
+                providers = self.bridge.get_provider_statuses()
+            except Exception:
+                providers = None
+        if not isinstance(drift, dict):
+            drift = None
+        if not isinstance(providers, list):
+            providers = None
+        self.chip_bar.update_states(chip_states(stats, drift, providers))
+
+    def set_probed_providers(self, statuses) -> None:
+        """Show a connectivity-probe result (None = probe failed)."""
+        if isinstance(statuses, list):
+            self._probed_providers = statuses
+        try:
+            self._update_chips(self.bridge.get_stats())
+        except Exception:
+            pass
 
 
 class PermissionBanner(QFrame):

@@ -362,6 +362,7 @@ class ConfigPanel(QWidget):
 
         # Threat Intelligence Providers Section
         providers_group = QGroupBox("Threat Intelligence Providers")
+        self._providers_group = providers_group
         providers_layout = QVBoxLayout()
         providers_layout.setSpacing(5)
 
@@ -407,6 +408,7 @@ class ConfigPanel(QWidget):
         content = QWidget()
         content.setLayout(layout)
         scroll = QScrollArea()
+        self._scroll = scroll
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setWidget(content)
@@ -462,6 +464,19 @@ class ConfigPanel(QWidget):
     def _on_theme_changed(self, index: int):
         crossfade_window(self.window())
         ThemeManager.instance().set_theme("dark" if index == 0 else "light")
+
+    def show_section(self, name: str) -> None:
+        """Scroll to the setting behind a header status chip (UX-9)."""
+        target = {
+            "enrichment": self.online_indicator,
+            "kill_switch": self.kill_indicator,
+            "integrity": self.integrity_indicator,
+            "providers": self._providers_group,
+            "drift": self.drift_indicator,
+            "notifications": self._notifications_group,
+        }.get(name)
+        if target is not None:
+            self._scroll.ensureWidgetVisible(target, 0, 40)
 
     # ----- notifications (UX-8) -----------------------------------------
 
