@@ -232,8 +232,11 @@ class TestContextMenu:
         destroy(view)
 
     def test_filter_by_ip_sets_search(self, qapp):
-        view, _ = TestTableShortcuts._view(self, qapp)
+        view = AlertsView(_bridge([
+            _alert(0, ip="198.51.100.7"), _alert(1, ip="203.0.113.9"), _alert(2),
+        ]))
         view.refresh()
+        assert view.table.rowCount() == 3
         menu = view._build_row_context_menu(0)
         submenu = menu.actions()[0].menu()
         for a in submenu.actions():

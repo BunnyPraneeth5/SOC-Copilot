@@ -471,7 +471,7 @@ class MainWindow(QMainWindow):
         self.page_splitter.setStretchFactor(1, 0)
         self.page_splitter.setSizes([self.width(), 0])
 
-        content_layout.addWidget(self.page_splitter)
+        content_layout.addWidget(self.page_splitter, 1)  # pages get spare height
         content_area.setLayout(content_layout)
         
         main_layout.addWidget(content_area)

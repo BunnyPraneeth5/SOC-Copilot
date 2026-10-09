@@ -10,7 +10,7 @@ model integrity, threat-intel providers and drift.
 
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QLabel, QFrame,
-    QGraphicsDropShadowEffect, QToolTip
+    QGraphicsDropShadowEffect, QToolTip, QSizePolicy
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont, QColor
@@ -313,6 +313,9 @@ class PermissionBanner(QFrame):
     
     def __init__(self, message: str, icon: str = "⚠️"):
         super().__init__()
+        # Never take spare height from the page below (on short pages the
+        # banner used to grow to half the window).
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         self._init_ui(message, icon)
     
     def _init_ui(self, message: str, icon: str):
@@ -375,6 +378,7 @@ class KillSwitchBanner(QFrame):
     
     def __init__(self):
         super().__init__()
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         self._init_ui()
     
     def _init_ui(self):

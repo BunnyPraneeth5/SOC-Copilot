@@ -67,7 +67,7 @@ def test_ui_improvements():
         sys.modules['PyQt6.QtCore'] = Mock()
         sys.modules['PyQt6.QtGui'] = Mock()
         
-        from soc_copilot.phase4.ui.dashboard import Dashboard
+        from soc_copilot.phase4.ui.dashboard_v2 import Dashboard
         from soc_copilot.phase4.ui.alerts_view import AlertsView
         
         # Test with mock bridge

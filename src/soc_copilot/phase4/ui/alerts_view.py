@@ -38,7 +38,7 @@ class AlertsView(QWidget):
     def __init__(self, bridge):
         super().__init__()
         self.bridge = bridge
-        self._alert_cache = {}  # batch_id -> alert data
+        self._alert_cache = {}  # alert key -> alert data
         self._current_filter = "All"
         self._current_status_filter = "All"
         self._search_text = ""
@@ -75,10 +75,22 @@ class AlertsView(QWidget):
             return {}
 
     @staticmethod
-    def _alert_dict(result, alert, triage: dict) -> dict:
+    def _alert_key(result, index: int, alert) -> str:
+        """Unique cache key: the alert_id, else batch + position.
+
+        Keying on batch + classification made two same-type alerts in
+        one batch collide, so only one of them was ever shown.
+        """
+        alert_id = getattr(alert, "alert_id", None)
+        if alert_id:
+            return str(alert_id)
+        return f"{result.batch_id}#{index}"
+
+    @classmethod
+    def _alert_dict(cls, result, alert, triage: dict, index: int = 0) -> dict:
         ts = getattr(alert, "timestamp", None)
         return {
-            "key": f"{result.batch_id}_{alert.classification}",
+            "key": cls._alert_key(result, index, alert),
             "batch_id": result.batch_id,
             "alert_id": alert.alert_id,
             "time": ts.strftime("%H:%M:%S")
@@ -375,8 +387,8 @@ class AlertsView(QWidget):
             alerts_data = []
 
             for result in results:
-                for alert in result.alerts:
-                    alert_dict = self._alert_dict(result, alert, triage)
+                for i, alert in enumerate(result.alerts):
+                    alert_dict = self._alert_dict(result, alert, triage, i)
                     self._alert_cache[alert_dict["key"]] = alert_dict
                     alerts_data.append(alert_dict)
             
@@ -416,10 +428,10 @@ class AlertsView(QWidget):
 
             new_alerts = []
             for result in results:
-                for alert in result.alerts:
-                    key = f"{result.batch_id}_{alert.classification}"
+                for i, alert in enumerate(result.alerts):
+                    key = self._alert_key(result, i, alert)
                     if key not in self._alert_cache:
-                        alert_dict = self._alert_dict(result, alert, triage)
+                        alert_dict = self._alert_dict(result, alert, triage, i)
                         self._alert_cache[key] = alert_dict
                         new_alerts.append(alert_dict)
 

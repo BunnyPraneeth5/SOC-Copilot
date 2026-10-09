@@ -138,7 +138,7 @@ class TestSetRole:
 
 
 class TestHexGuard:
-    """No hard-coded hex colours outside theme.py / legacy dashboard.py."""
+    """No hard-coded hex colours outside theme.py."""
 
     def test_no_hex_literals_in_ui_files(self):
         ui_dir = (
@@ -148,7 +148,7 @@ class TestHexGuard:
         pattern = re.compile(r"#[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{3}\b")
         offenders = []
         for path in sorted(ui_dir.glob("*.py")):
-            if path.name in ("theme.py", "dashboard.py"):
+            if path.name == "theme.py":
                 continue
             for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
                 if pattern.search(line):

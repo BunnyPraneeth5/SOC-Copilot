@@ -1,7 +1,7 @@
 """UI/UX Layer for SOC Copilot - v0.3.0 Dashboard UX Redesign"""
 
 from .main_window import MainWindow
-from .dashboard import Dashboard
+from .dashboard_v2 import Dashboard
 from .alerts_view import AlertsView
 from .controller_bridge import ControllerBridge
 from .config_panel import ConfigPanel
