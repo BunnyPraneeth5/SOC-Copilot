@@ -2,8 +2,28 @@
 
 import sys
 import os
+import traceback
 from pathlib import Path
 from soc_copilot.core.logging import setup_logging, get_logger
+
+
+def install_excepthook(logger) -> None:
+    """Log unhandled exceptions instead of letting PyQt abort the app.
+
+    With the default hook, PyQt6 calls qFatal() when a slot or timer
+    callback raises, killing the whole process without a message.
+    """
+    def hook(exc_type, exc, tb):
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc, tb)
+            return
+        logger.error(
+            "unhandled_exception",
+            error=f"{exc_type.__name__}: {exc}",
+            traceback="".join(traceback.format_exception(exc_type, exc, tb)),
+        )
+
+    sys.excepthook = hook
 
 
 def main() -> int:
@@ -73,6 +93,7 @@ def main() -> int:
             print("UI will launch but analysis will not be available.")
         
         # Launch UI
+        install_excepthook(logger)
         app = QApplication(sys.argv)
 
         # Apply central theme (persisted preference, dark default)

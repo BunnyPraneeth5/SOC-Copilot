@@ -1,8 +1,10 @@
 """Pytest configuration for Qt tests"""
 
 import os
-import pytest
 import sys
+import traceback
+
+import pytest
 
 
 @pytest.fixture(autouse=True)
@@ -55,13 +57,30 @@ def qtbot(qapp):
         destroy(*bot._widgets)
 
 
-# Temporary crash tracer: append each test's nodeid to a file BEFORE it
-# runs (fd-level capture would hide stderr prints; a direct handle is
-# flushed to disk so the last line is the test that died).
-_TRACE = open(os.path.join(".cache", "test_trace.txt"), "w", buffering=1)
+# Unhandled exceptions in Qt callbacks (slots, timers): with the default
+# sys.excepthook PyQt6 calls qFatal() and the whole run dies silently
+# (exit 127 / 0xC0000409), often several tests after the culprit. Record
+# them instead and fail the test during which they surfaced.
+_qt_callback_errors = []
 
 
-def pytest_runtest_setup(item):
-    _TRACE.write(item.nodeid + "\n")
-    _TRACE.flush()
-    os.fsync(_TRACE.fileno())
+def _record_unhandled(exc_type, exc, tb):
+    _qt_callback_errors.append(
+        "".join(traceback.format_exception(exc_type, exc, tb))
+    )
+
+
+sys.excepthook = _record_unhandled
+
+
+@pytest.fixture(autouse=True)
+def _fail_on_unhandled_qt_exceptions():
+    _qt_callback_errors.clear()
+    yield
+    if _qt_callback_errors:
+        errors = "\n".join(_qt_callback_errors)
+        _qt_callback_errors.clear()
+        pytest.fail(
+            "Unhandled exception in a Qt callback (aborts the real app; may "
+            "come from an earlier test's timer):\n" + errors
+        )

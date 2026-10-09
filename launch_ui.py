@@ -216,7 +216,11 @@ def main():
                 controller, kill_switch, project_root
             )
         
-        # Create and configure QApplication
+        # Create and configure QApplication. Unhandled callback errors are
+        # logged instead of letting PyQt abort the process.
+        from soc_copilot.main import install_excepthook
+        from soc_copilot.core.logging import get_logger
+        install_excepthook(get_logger("soc_copilot.ui"))
         app = QApplication(sys.argv)
 
         # Apply central theme (persisted preference, dark default)

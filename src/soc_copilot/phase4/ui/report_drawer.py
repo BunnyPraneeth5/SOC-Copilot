@@ -46,6 +46,13 @@ class ReportDrawer(QFrame):
         self._history: list = []  # [(label, report)]
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._init_ui()
+        # "Copied" -> "Copy" reset. A timer owned by the drawer dies with
+        # it; a bare singleShot lambda outlived the button and its
+        # RuntimeError made PyQt abort the process.
+        self._copy_reset = QTimer(self)
+        self._copy_reset.setSingleShot(True)
+        self._copy_reset.setInterval(1500)
+        self._copy_reset.timeout.connect(lambda: self.copy_btn.setText("Copy"))
         ThemeManager.instance().theme_changed.connect(self._apply_theme)
         self.hide()
 
@@ -444,7 +451,7 @@ class ReportDrawer(QFrame):
         QApplication.clipboard().setText(report_to_markdown(self._current_report))
         self.copy_btn.setText("Copied")
         show_toast(self, "Report copied as Markdown", "success")
-        QTimer.singleShot(1500, lambda: self.copy_btn.setText("Copy"))
+        self._copy_reset.start()
 
     def _export_markdown(self):
         if self._current_report is None:
