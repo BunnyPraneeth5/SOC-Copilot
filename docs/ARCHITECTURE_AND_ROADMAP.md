@@ -95,11 +95,11 @@ flowchart TD
     F --> |Class & Confidence| G
     G --> |Risk Score > Threshold| H[Alert Generator]
     H --> I[Deduplication Window]
-    I --> J[In-Memory ResultStore (max 1000)]
+    I --> J[ResultStore: SQLite results.db, newest 1000]
     J --> K[PyQt6 Dashboard]
 ```
 
-- **Why it is built this way:** The bifurcated ML approach (Isolation Forest alongside Random Forest) ensures the system can detect zero-day anomalies (via IF) while retaining high-precision categorization for known threats like DDoS or BruteForce (via RF). Deduplication occurs post-generation to prevent alert storms and analyst fatigue. Alerts are held in an in-memory `ResultStore` capped at 1000 entries (`src/soc_copilot/phase4/controller/result_store.py`); SQLite is used for governance, drift, and feedback data, not for the alert store — persistent alert storage remains open work.
+- **Why it is built this way:** The bifurcated ML approach (Isolation Forest alongside Random Forest) ensures the system can detect zero-day anomalies (via IF) while retaining high-precision categorization for known threats like DDoS or BruteForce (via RF). Deduplication occurs post-generation to prevent alert storms and analyst fatigue. Results (logs, alerts and their triage status) are persisted by `ResultStore` (`src/soc_copilot/phase4/controller/result_store.py`) to `data/alerts/results.db`, keeping the newest 1000 results, with an in-memory fallback if the database is unavailable. Governance, drift and feedback data live in their own SQLite stores.
 
 #### MCP Orchestrator & Async Coordination
 
@@ -159,10 +159,12 @@ Threat intelligence APIs are called in the `mcp` layer. `ReputationAgent` hits V
 
 #### PyQt6 GUI
 
-- **What it does:** Provides the desktop application interface, comprising a Dashboard, Alerts View, Config Panel, and System Status Bar.
+- **What it does:** Provides the desktop application: Dashboard, Alerts (paginated, filterable, exportable, with triage status), Investigation details, investigation report side drawer, Assistant, All Logs (with Clear logs) and Settings, plus header status chips and system-tray notifications.
 - **Why it was built this way:** To meet the strict "offline desktop-first" requirement. PyQt6 is robust, cross-platform, and allows for complex table rendering required for log analysis.
-- **Inputs/Outputs:** Takes user clicks and file paths. Outputs visual graphs, rendered data tables, and sends signals to the ControllerBridge.
-- **Known limitations:** `src/soc_copilot/phase4/ui/dashboard_v2.py` (line 377) — The main thread can still stutter if large datasets are loaded into `QTableWidget` without pagination or chunking.
+- **Inputs/Outputs:** Takes user clicks and file paths. Outputs rendered data tables and status, and sends requests to the ControllerBridge.
+- **Design system:** colours come only from theme tokens (`theme.py`, light/dark + colour-blind-safe), icons from `icons.py` (Feather, no emoji), and shared building blocks from `components.py` (page header, table badges, switches, settings cards). Hex-colour and emoji guard tests enforce this.
+- **Read-only bridge:** the UI cannot change analysis data. The only exceptions are narrow and audited: analyst feedback, triage status, and `clear_logs(confirmed=True)` after a confirmation dialog.
+- **Known limitations:** The Assistant answers from fixed templates (not yet connected to the LLM); the alerts-table double-click investigates the source IP only.
 
 #### Config/Auth Layer
 
@@ -208,7 +210,6 @@ The following significant technical debt items have been explicitly addressed an
 - **Two intentionally-separate kill switches:** Phase 3 uses a SQLite-backed governance lock (`phase3/governance/killswitch.py`) while Phase 4 uses a `.kill` sentinel file for the emergency analysis stop (`phase4/kill_switch.py`, also reachable via `soc-copilot killswitch`). They serve different purposes and are deliberately not synchronized.
 - **Explainer is CLI-only:** Phase 2 feedback, drift monitoring, and Phase 3 audit logging are wired into the UI (analyst feedback on alert details, drift indicator + audit persistence via `AppController`); only the explainer remains CLI-only.
 - **UI domain investigations:** The orchestrator supports domains, but the alerts-table double-click only reads the source-IP column.
-- **Mobile companion app:** Shelved by product decision — not planned. The FastAPI layer it depended on is deferred with it (see §8).
 
 ---
 
@@ -216,7 +217,7 @@ The following significant technical debt items have been explicitly addressed an
 
 ### 6. Future Vision
 
-In the next 12 months, SOC Copilot must transition from a purely reactive analysis tool into an active investigation platform, primarily by exposing its capabilities through a Multi-Agent Cyber-investigation Pipeline (MCP). Ultimately, the application will integrate a FastAPI backend layer to allow the desktop application to act as a local MCP server, allowing external agents or trusted local network services to query its intelligence securely.
+SOC Copilot is moving from a purely reactive analysis tool to an active investigation platform built around its Multi-Agent Cyber-investigation Pipeline (MCP), while staying a single-user, desktop-first application.
 
 **Scope Guardrails (What it will NOT become):**
 
@@ -227,9 +228,9 @@ In the next 12 months, SOC Copilot must transition from a purely reactive analys
 
 ### 7. Milestone Roadmap (1-4 Week Sprint)
 
-The MCP integration and its UI binding are now implemented. The following milestones track how it was brought online and what remains (provider resilience, live visualization).
+Milestones 1–5 and 5b are done. Milestone 6 (live workflow visualization) is next.
 
-#### Milestone 1: Reputation and Shodan Agent Implementation (Done 05/07/2026 08:00PM)
+#### Milestone 1: Reputation and Shodan Agent Implementation — ✅ Done (05/07/2026)
 
 - **Goal:** Replace the `NotImplementedError` scaffolds in `ReputationAgent` and `ShodanAgent` with working async API calls.
 - **Why it matters:** Brings critical external context (malware history, open ports) to raw IP addresses, drastically reducing manual lookup time.
@@ -239,7 +240,7 @@ The MCP integration and its UI binding are now implemented. The following milest
 - **Acceptance criteria:** Unit tests pass for both agents; API timeouts correctly yield `AgentStatus.TIMEOUT` or `PARTIAL` results without crashing.
 - **Risks:** Missing API keys causing silent failures (mitigated by existing `APIKeyMissingError` logic).
 
-#### Milestone 2: Claude LLM Report Agent (Done 07/07/2026 11:00PM but with different LLM)
+#### Milestone 2: LLM Report Agent — ✅ Done (07/07/2026, NVIDIA NIM / OpenRouter)
 
 - **Goal:** Connect the `ReportAgent` to an LLM to consume the outputs of agents 1-3 and output a structured `ThreatReport`. Implemented via OpenAI-compatible adapters for NVIDIA NIM and OpenRouter (`REPORT_LLM_PROVIDER`); a Claude/Anthropic adapter remains an open item.
 - **Why it matters:** Human-readable summaries and severity ratings (CRITICAL/HIGH/MEDIUM/LOW) are required to make raw intel actionable for Tier 1 analysts.
@@ -249,7 +250,7 @@ The MCP integration and its UI binding are now implemented. The following milest
 - **Acceptance criteria:** Agent correctly formats the `REPORT_SYSTEM_PROMPT` and parses the provider's response into the Pydantic `ThreatReport` model.
 - **Risks:** High latency from the hosted LLM provider leading to orchestrator timeouts.
 
-#### Milestone 3: Orchestrator Parallelization & Caching (Done 09/07/2026 02:00AM)
+#### Milestone 3: Orchestrator Parallelization & Caching — ✅ Done (09/07/2026)
 
 - **Goal:** Implement `asyncio.gather()` in `MCPOrchestrator` to run the collection agents concurrently, and implement the 6-hour TTL `diskcache`.
 - **Why it matters:** Running API lookups synchronously takes too long. Caching prevents rate-limiting and redundant API costs for frequently attacking IPs.
@@ -261,16 +262,16 @@ The MCP integration and its UI binding are now implemented. The following milest
 
 #### Milestone 4: PyQt6 UI Binding — ✅ Done
 
-- **Goal:** Bind the orchestrator to the GUI so that double-clicking an IP in the `AlertsView` triggers the investigation asynchronously. Implemented: double-click on an alerts-table row calls `ControllerBridge.investigate_target`, which runs the orchestrator on a `QRunnable` inside the `QThreadPool`, then emits a `reportReady` signal that `alerts_view` renders as a modal threat report.
+- **Goal:** Bind the orchestrator to the GUI so that double-clicking an IP in the `AlertsView` triggers the investigation asynchronously. Implemented: double-click on an alerts-table row calls `ControllerBridge.investigate_target`, which runs the orchestrator on a `QRunnable` inside the `QThreadPool`, then emits a `reportReady` signal that is shown in the investigation report side drawer (UX-4).
 - **Why it matters:** This is the actual user feature—connecting the backend pipeline to analyst interactions.
 - **Files affected:** `src/soc_copilot/phase4/ui/alerts_view.py`, `src/soc_copilot/phase4/ui/controller_bridge.py`.
 - **Estimated complexity:** High
 - **Dependencies:** Milestone 3.
-- **Acceptance criteria:** Double-clicking table column 2 (IP) fires a `QRunnable` task to the `QThreadPool`, executing the orchestrator, and emitting a custom `reportReady` Qt signal to display a modal dialogue with the `ThreatReport`. The UI must not freeze. (Met.)
+- **Acceptance criteria:** Double-clicking table column 2 (IP) fires a `QRunnable` task to the `QThreadPool`, executing the orchestrator, and emitting a custom `reportReady` Qt signal to display the `ThreatReport` (originally a modal dialog, now the side drawer). The UI must not freeze. (Met.)
 - **Note:** The orchestrator supports both IPs and domains, but the UI double-click handler currently reads the source-IP column only — wiring the domain column remains open.
 - **Risks:** Executing `asyncio` loops inside Qt threads requires careful management to prevent deadlocks or segment faults.
 
-#### Milestone 5: Provider & Connectivity Layer
+#### Milestone 5: Provider & Connectivity Layer — ✅ Done
 
 - **Goal:** Build a provider management layer that tracks the live status of each external service (NVIDIA NIM, Shodan, AbuseIPDB, VirusTotal) and makes the pipeline resilient to missing keys or offline providers.
 - **Why it matters:** This is the online/offline resilience story — the orchestrator must degrade gracefully to local-only mode when a provider is unavailable, rather than failing the entire pipeline.
@@ -300,14 +301,16 @@ The MCP integration and its UI binding are now implemented. The following milest
   - ✅ **UX-8:** System-tray notifications for new P0-Critical/P1-High alerts (`notifications.py`): one combined balloon per batch, alerts present at startup never announced, mute + per-priority switches in Settings and the tray menu (persisted); clicking a balloon opens Alerts.
   - ✅ **UX-9:** Clickable header status chips (`status_chips.py`) — enrichment, kill switch, model integrity, providers (uses the latest connectivity probe when available), drift; clicking opens Settings scrolled to that section.
   - ✅ **UX-10:** Cleanup — removed unused `dashboard.py`; alerts-table cache keyed by `alert_id` (two same-type alerts in one batch no longer collapse into one row); Investigate column fixed-width; permission banner no longer grows to fill short pages.
-  - Extras shipped alongside: WCAG AA contrast / focus states, page transitions + toasts with a "Reduce motion" setting.
+  - ✅ Extras shipped alongside: WCAG AA contrast / focus states, page transitions + toasts with a "Reduce motion" setting.
+  - ✅ **Clear logs:** All Logs page button that permanently deletes analysed logs and the alerts found in them (with their triage status) after a confirmation dialog (Cancel is the default; it states the counts and that they will not be shown again). Feedback and the audit trail are kept; every clear is audited (`results_cleared`).
+  - ✅ **UI polish pass:** emoji replaced by a themed line-icon set (`icons.py`); shared components (`components.py`) give every page the same header, toolbar, spacing and type scale; tables show severity/status as badges with neutral rows; system status shown once (header chips for pipeline, ingestion, enrichment, kill switch, integrity, providers, drift); Settings rebuilt as cards with one switch style; unused `dashboard_components.py` removed.
 - **Test-suite stability:** The full suite used to die silently near 89% (exit 127 / `0xC0000409`). Cause: a `QTimer.singleShot` lambda in the report drawer fired after the drawer was destroyed; PyQt6 calls `qFatal()` for any unhandled exception in a Qt callback while the default `sys.excepthook` is installed. Fixed by an owned timer; the app now installs a logging excepthook (`soc_copilot.main.install_excepthook`), and `tests/conftest.py` records such exceptions and fails the test where they surface instead of aborting the run. No split-suite strategy is needed. Rule for new UI code: never schedule a lambda that touches a widget with `QTimer.singleShot` — use a timer parented to the widget or a bound method.
 - **Acceptance criteria:**
-  - All UI colours resolve through theme tokens (no hex literals outside `theme.py`, enforced by a test).
+  - All UI colours resolve through theme tokens (no hex literals outside `theme.py`, enforced by a test); no emoji in UI code (enforced by a test).
   - `ThemeManager` can switch palettes at runtime via `set_theme()` and re-apply the global stylesheet.
   - No behavioural regressions: layouts, texts, signal wiring, and the full test suite stay green.
 - **Risks:** Visual drift during migration; mitigated by mapping near-duplicate colours to the closest semantic token and screenshot-diffing key pages offscreen.
-- **Status:** Done — UX-1..UX-10 complete; full suite green (893 passed, 7 skipped).
+- **Status:** Done — UX-1..UX-10, Clear logs and the polish pass complete; full suite green (914 passed, 7 skipped).
 
 #### Milestone 6: Live Workflow Visualization (PyQt6-native)
 
@@ -328,44 +331,7 @@ The MCP integration and its UI binding are now implemented. The following milest
 - **Risks:** `QGraphicsScene` performance degrades with many animated items; mitigate by limiting concurrent packet animations and pausing off-screen nodes.
 - **Status:** Not started
 
-### 8. Target Architecture (with FastAPI)
-
-**Deferred:** the FastAPI layer was mainly needed for the mobile companion app, which is shelved; it is not scheduled. The design below is kept for reference. Once the MCP pipeline is complete, the application could introduce a FastAPI layer (not started). This shifts the `AppController` behind an HTTP interface, allowing the PyQt6 GUI (or external tools) to communicate via standard REST/JSON, turning SOC Copilot into a true local MCP server.
-
-```mermaid
-flowchart TD
-    subgraph UI Layer
-        A[PyQt6 Desktop GUI]
-        B[External Local Tools]
-    end
-
-    subgraph API Layer
-        C[FastAPI Server]
-    end
-
-    subgraph Controller Layer
-        D[AppController]
-        E[MCPOrchestrator]
-    end
-
-    subgraph Engine & Agents
-        F[ML Pipeline IF/RF]
-        G[ReportAgent LLM]
-        H[Recon/Reputation/Shodan]
-    end
-
-    A -- REST/JSON --> C
-    B -- REST/JSON --> C
-    C --> D
-    D --> F
-    D --> E
-    E --> H
-    H --> G
-    G --> E
-    E --> D
-```
-
-### 9. Risk Analysis
+### 8. Risk Analysis
 
 | Risk | Current State | What breaks if ignored | Recommended Mitigation |
 |------|---------------|------------------------|------------------------|
@@ -373,10 +339,10 @@ flowchart TD
 | **GUI Deadlocks** | Async API calls are bound to the PyQt6 interface via `QThreadPool`/`QRunnable` workers and `reportReady` signals. | If asyncio loops were run directly on the main UI thread, the application would freeze for up to 30 seconds during report generation. | Keep executing the orchestrator entirely off the main thread, communicating back strictly via `pyqtSignal`. |
 | **LLM Latency** | NVIDIA NIM / OpenRouter API calls in `ReportAgent` take significant time. | Orchestrator timeouts (currently 10s) will kill the ReportAgent before it finishes. | Increase `ReportAgent` specific timeout to 30s. Stream partial UI updates to the user ("Gathering data...", "Analyzing...") so they know the system isn't hung. |
 
-### 10. Final Recommendations
+### 9. Final Recommendations
 
 **Implementation Phasing:**
-The milestones outlined above must be implemented strictly in order (1 through 4). Do not attempt to bind the PyQt6 UI (Milestone 4) until the `MCPOrchestrator` is successfully parallelizing agents and caching results (Milestone 3) via CLI test scripts.
+Milestones 1–5 and 5b were delivered in order and are complete. Build new work the same way: each milestone in small, separately tested steps, keeping the full test suite green and verifying UI changes with screenshots.
 
 **Guiding Principles:**
 
