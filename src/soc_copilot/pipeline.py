@@ -334,9 +334,11 @@ class SOCCopilot:
             for key in candidates:
                 if key in row.index and pd.notna(row[key]):
                     try:
-                        vector[i] = float(row[key])
+                        value = float(row[key])
                     except (TypeError, ValueError):
-                        vector[i] = 0.0
+                        value = 0.0
+                    # training replaced inf/NaN ("Infinity" in CICIDS) by 0
+                    vector[i] = value if np.isfinite(value) else 0.0
                     break
 
         return vector

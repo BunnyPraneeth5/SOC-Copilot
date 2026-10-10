@@ -178,7 +178,8 @@ class AppController:
 
         # Extract raw lines
         with self._stage(batch_id, "ingest") as st:
-            raw_lines = [r.get("raw_line", "") for r in records if r.get("raw_line")]
+            line_records = [r for r in records if r.get("raw_line")]
+            raw_lines = [r["raw_line"] for r in line_records]
             st["detail"] = f"{len(raw_lines)} log lines"
             st["data"] = {"records": len(raw_lines)}
             if not raw_lines:
@@ -206,7 +207,9 @@ class AppController:
         # Analyze batch (using existing ML pipeline). If it fails, keep the
         # text-log/rule alerts instead of discarding the whole batch.
         try:
-            results, alerts, stats = self._analyze_lines(raw_lines, batch_id)
+            results, alerts, stats = self._analyze_lines(
+                raw_lines, batch_id, line_records
+            )
         except Exception as e:
             logger.error("ml_pipeline_batch_failed", lines=len(raw_lines), error=str(e))
             self._dropped_count += len(raw_lines)
@@ -1134,8 +1137,41 @@ class AppController:
         
         return entry
     
-    def _analyze_lines(self, lines: List[str], batch_id: Optional[str] = None):
+    @staticmethod
+    def _structured_fields(record: Optional[dict]) -> Optional[dict]:
+        """Fields a source already parsed (e.g. CSV columns), without
+        ``raw_line``; numeric strings become numbers, since CSV readers
+        yield every value as text. None when the record has no fields.
+        """
+        if not isinstance(record, dict):
+            return None
+        fields = {}
+        for key, value in record.items():
+            if key == "raw_line" or not isinstance(key, str):
+                continue
+            if isinstance(value, str):
+                text = value.strip()
+                try:
+                    value = int(text)
+                except ValueError:
+                    try:
+                        value = float(text)
+                    except ValueError:
+                        pass
+            fields[key] = value
+        return fields or None
+
+    def _analyze_lines(
+        self,
+        lines: List[str],
+        batch_id: Optional[str] = None,
+        records: Optional[List[dict]] = None,
+    ):
         """Analyze lines using existing pipeline.
+
+        ``records`` (parallel to ``lines``) may carry fields the source
+        already parsed, such as CSV columns; they are checked for flow
+        features first, then the raw line as before.
 
         With ``batch_id`` set, reports the flow-lane stages (routing,
         preprocess, features, detect) to stage listeners.
@@ -1149,15 +1185,23 @@ class AppController:
         with self._stage(batch_id, "flow_route") as st:
             flow_entries = []
             for index, line in enumerate(lines):
-                # Use JSON objects as-is, otherwise extract fields from the raw log
-                try:
-                    log_entry = json.loads(line)
-                except (json.JSONDecodeError, TypeError):
-                    log_entry = None
-                if not isinstance(log_entry, dict):
-                    log_entry = self._parse_raw_log(line)
-                if not self._is_flow_record(log_entry):
-                    continue
+                # Fields the source parsed (CSV columns) first: the CSV
+                # raw_line is "key=value" text that loses the field names
+                fields = self._structured_fields(
+                    records[index] if records and index < len(records) else None
+                )
+                if fields is not None and self._is_flow_record(fields):
+                    log_entry = fields
+                else:
+                    # Use JSON objects as-is, otherwise extract fields from the raw log
+                    try:
+                        log_entry = json.loads(line)
+                    except (json.JSONDecodeError, TypeError):
+                        log_entry = None
+                    if not isinstance(log_entry, dict):
+                        log_entry = self._parse_raw_log(line)
+                    if not self._is_flow_record(log_entry):
+                        continue
                 log_entry["_line_index"] = index
                 flow_entries.append(log_entry)
 
