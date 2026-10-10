@@ -55,6 +55,9 @@
     "DataExfiltration": "Exfiltration",
     "PortScan": "BruteForce",
     "Heartbleed": "Malware",
-    "Web Attack": "BruteForce"
+    "Web Attack": "BruteForce",
+    "Web Attack - Brute Force": "BruteForce",
+    "Web Attack - XSS": "BruteForce",
+    "Web Attack - Sql Injection": "BruteForce"
   }
 }

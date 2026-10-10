@@ -5,6 +5,7 @@ for training ML models on Kaggle security datasets.
 """
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -84,7 +85,22 @@ DEFAULT_LABEL_MAPPINGS: dict[str, str] = {
     "PortScan": "BruteForce",
     "Heartbleed": "Malware",
     "Web Attack": "BruteForce",
+    # CICIDS2017 web attacks; the raw labels use a dash that is stored as
+    # U+FFFD or 0x96 instead of "-", see normalize_label
+    "Web Attack - Brute Force": "BruteForce",
+    "Web Attack - XSS": "BruteForce",
+    "Web Attack - Sql Injection": "BruteForce",
 }
+
+
+def normalize_label(raw: Any) -> str:
+    """Clean a dataset label before mapping.
+
+    Strips whitespace and turns runs of non-ASCII characters (broken
+    dashes in CICIDS2017) with their surrounding spaces into " - ".
+    """
+    text = re.sub(r"\s*[^\x20-\x7e]+\s*", " - ", str(raw).strip())
+    return re.sub(r"\s+", " ", text).strip()
 
 
 class DataLoaderConfig(BaseModel):
@@ -305,7 +321,7 @@ class TrainingDataLoader:
         # Map labels
         original_labels = df[label_col].unique()
         df["label"] = df[label_col].apply(
-            lambda x: self._label_mappings.get(str(x).strip(), "Unknown")
+            lambda x: self._label_mappings.get(normalize_label(x), "Unknown")
         )
         
         # Report mapping statistics
