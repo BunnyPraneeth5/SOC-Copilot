@@ -43,8 +43,10 @@ ICONS = {
                  '<path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>',
     "check": '<polyline points="20 6 9 17 4 12"/>',
     "check-circle": '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>',
+    "chevron-down": '<polyline points="6 9 12 15 18 9"/>',
     "chevron-left": '<polyline points="15 18 9 12 15 6"/>',
     "chevron-right": '<polyline points="9 18 15 12 9 6"/>',
+    "chevron-up": '<polyline points="18 15 12 9 6 15"/>',
     "clock": '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
     "copy": '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>'
             '<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',

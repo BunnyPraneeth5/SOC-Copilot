@@ -790,6 +790,10 @@ class ThemeManager(QObject):
 
     # ----- persistence ---------------------------------------------------------
 
+    def settings(self) -> QSettings:
+        """The QSettings used for UI preferences (temp INI in tests)."""
+        return self._settings_or_default(None)
+
     def _settings_or_default(self, settings: QSettings | None) -> QSettings:
         if settings is not None:
             return settings

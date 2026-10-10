@@ -19,7 +19,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
+from PyQt6.QtCore import (
+    QEasingCurve,
+    QPointF,
+    QPropertyAnimation,
+    QRectF,
+    QSize,
+    Qt,
+    pyqtProperty,
+    pyqtSignal,
+)
 from PyQt6.QtGui import (
     QBrush,
     QColor,
@@ -40,6 +49,7 @@ from PyQt6.QtWidgets import (
 )
 
 from soc_copilot.phase4.ui.icons import pixmap
+from soc_copilot.phase4.ui.motion import FAST, motion_enabled
 from soc_copilot.phase4.ui.theme import FONT_FAMILY, ThemeManager
 
 # Stage keys match soc_copilot.phase4.controller.schemas.PIPELINE_STAGES
@@ -109,7 +119,7 @@ NODE_W = 116
 ML_NODE_W = 160  # collapsed group also shows the current sub-stage
 NODE_H = 46
 COL_STEP = 150
-LANE_Y = {"text": 0, "mid": 59, "flow": 118}
+LANE_Y = {"text": 0, "mid": 50, "flow": 100}
 GROUP_PAD = 10
 GROUP_HEADER = 22
 
@@ -144,6 +154,28 @@ def _tinted(name: str, alpha: int) -> QColor:
     c = _token(name)
     c.setAlpha(alpha)
     return c
+
+
+def _mix(a: QColor, b: QColor, t: float) -> QColor:
+    """Linear blend from ``a`` (t=0) to ``b`` (t=1), alpha included."""
+    return QColor(
+        round(a.red() + (b.red() - a.red()) * t),
+        round(a.green() + (b.green() - a.green()) * t),
+        round(a.blue() + (b.blue() - a.blue()) * t),
+        round(a.alpha() + (b.alpha() - a.alpha()) * t),
+    )
+
+
+def status_colors(status: str) -> tuple[QColor, QColor]:
+    """(fill, border) of a node in ``status``."""
+    token = STATUS_TOKEN[status]
+    if status == IDLE:
+        fill = _token("surface_alt")
+    elif status == SKIPPED:
+        fill = QColor(Qt.GlobalColor.transparent)
+    else:
+        fill = _tinted(token, 46)
+    return fill, _token(token)
 
 
 def _font(px: int, weight: QFont.Weight = QFont.Weight.Normal) -> QFont:
@@ -188,6 +220,14 @@ class NodeItem(QGraphicsObject):
         self.detail = ""
         self.note = ""  # extra status text, e.g. current ML sub-stage
         self._on_click = on_click
+        self._from_status: str | None = None  # status being faded out
+        self._blend = 1.0
+        self._anim = QPropertyAnimation(self, b"blend", self)
+        self._anim.setDuration(FAST)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._anim.setStartValue(0.0)
+        self._anim.setEndValue(1.0)
+        self._anim.finished.connect(self._fade_done)
         self.setAcceptHoverEvents(on_click is not None)
         if on_click is not None:
             self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -201,7 +241,33 @@ class NodeItem(QGraphicsObject):
         text = STATUS_TEXT[self.status]
         return f"{text} · {self.note}" if self.note else text
 
-    def set_status(self, status: str, detail: str = "", note: str = "") -> None:
+    def _get_blend(self) -> float:
+        return self._blend
+
+    def _set_blend(self, value: float) -> None:
+        self._blend = value
+        self.update()
+
+    blend = pyqtProperty(float, _get_blend, _set_blend)
+
+    @property
+    def fading(self) -> bool:
+        return self._anim.state() == QPropertyAnimation.State.Running
+
+    def _fade_done(self) -> None:
+        self._from_status = None
+
+    def set_status(self, status: str, detail: str = "", note: str = "",
+                   animate: bool = False) -> None:
+        """Change status; ``animate`` fades the colours over ``FAST`` ms."""
+        self._anim.stop()
+        if animate and status != self.status:
+            self._from_status = self.status
+            self._blend = 0.0
+            self._anim.start()
+        else:
+            self._from_status = None
+            self._blend = 1.0
         self.status = status
         self.detail = detail
         self.note = note
@@ -224,13 +290,12 @@ class NodeItem(QGraphicsObject):
         w = self.width
         rect = QRectF(0, 0, w, NODE_H)
 
-        if self.status == IDLE:
-            fill = _token("surface_alt")
-        elif self.status == SKIPPED:
-            fill = QColor(Qt.GlobalColor.transparent)
-        else:
-            fill = _tinted(token, 46)
-        pen = QPen(_token(token), 1.5 if self.status == ACTIVE else 1.0)
+        fill, border = status_colors(self.status)
+        if self._from_status is not None and self._blend < 1.0:
+            old_fill, old_border = status_colors(self._from_status)
+            fill = _mix(old_fill, fill, self._blend)
+            border = _mix(old_border, border, self._blend)
+        pen = QPen(border, 1.5 if self.status == ACTIVE else 1.0)
         if self.status == SKIPPED:
             pen.setStyle(Qt.PenStyle.DashLine)
         painter.setPen(pen)
@@ -306,14 +371,11 @@ class GroupFrame(QGraphicsObject):
         painter.setBrush(QBrush(_tinted("surface_alt", 90)))
         painter.drawRoundedRect(self._rect.adjusted(0.5, 0.5, -0.5, -0.5), 8, 8)
 
-        chev = pixmap("chevron-left", "text_muted", 24)
-        # chevron-left rotated a quarter turn reads as "collapse"
-        painter.save()
-        centre = QPointF(self._rect.left() + 16, self._rect.top() + 12)
-        painter.translate(centre)
-        painter.rotate(-90)
-        painter.drawPixmap(QRectF(-6, -6, 12, 12), chev, QRectF(chev.rect()))
-        painter.restore()
+        chev = pixmap("chevron-down", "text_muted", 24)
+        painter.drawPixmap(
+            QRectF(self._rect.left() + 10, self._rect.top() + 6, 12, 12),
+            chev, QRectF(chev.rect()),
+        )
 
         painter.setPen(_token("text_muted"))
         painter.setFont(_font(11, QFont.Weight.DemiBold))
@@ -462,8 +524,14 @@ class PipelineGraphWidget(QGraphicsView):
         self._refresh_edges()
         self._update_description()
 
-    def apply_event(self, event) -> None:
-        """Apply one ``StageEvent``; a new ``batch_id`` starts a fresh run."""
+    def apply_event(self, event, animate: bool | None = None) -> None:
+        """Apply one ``StageEvent``; a new ``batch_id`` starts a fresh run.
+
+        ``animate`` (default: when motion is enabled for this widget) fades
+        node colours; with Reduce motion on, changes are instant.
+        """
+        if animate is None:
+            animate = motion_enabled(self)
         node = self.nodes.get(getattr(event, "stage", None))
         status = getattr(event, "status", None)
         if node is None or status not in STATUS_TEXT:
@@ -471,12 +539,15 @@ class PipelineGraphWidget(QGraphicsView):
         if event.batch_id != self._batch_id:
             self.reset()
             self._batch_id = event.batch_id
-        node.set_status(status, event.detail or "")
-        self._refresh_ml_node()
+        node.set_status(status, event.detail or "", animate=animate)
+        self._refresh_ml_node(animate)
         self._refresh_edges()
         self._update_description()
 
-    def _refresh_ml_node(self) -> None:
+    def is_fading(self) -> bool:
+        return any(n.fading for n in (*self.nodes.values(), self.ml_node))
+
+    def _refresh_ml_node(self, animate: bool = False) -> None:
         statuses = [self.nodes[s].status for s in ML_STAGES]
         status = aggregate_status(statuses)
         current = next(
@@ -491,7 +562,7 @@ class PipelineGraphWidget(QGraphicsView):
             + (f" ({self.nodes[s].detail})" if self.nodes[s].detail else "")
             for s in ML_STAGES
         )
-        self.ml_node.set_status(status, detail, note)
+        self.ml_node.set_status(status, detail, note, animate=animate)
 
     def _refresh_edges(self) -> None:
         for _, _, edge in self.edges:
@@ -589,6 +660,16 @@ class PipelineGraphWidget(QGraphicsView):
     def showEvent(self, event) -> None:
         super().showEvent(event)
         self._fit()
+
+    def set_preferred_height(self, height: int) -> None:
+        """Height the layout should give the graph when there is room."""
+        self._preferred_h = height
+        self.setMaximumHeight(height)
+        self.updateGeometry()
+
+    def sizeHint(self) -> QSize:
+        hint = super().sizeHint()
+        return QSize(hint.width(), getattr(self, "_preferred_h", hint.height()))
 
     def heightForScene(self, width: int) -> int:
         """Height that shows the scene at ``width`` without letterboxing."""

@@ -3,6 +3,7 @@
 - Page header with the primary actions (Upload logs, Refresh)
 - Threat level banner
 - Metric cards (total / critical / high / medium / low)
+- Pipeline card: live graph of the analysis stages (Milestone 6a)
 - Recent alerts table
 
 System status lives only in the header chips (MainWindow), so it is not
@@ -21,6 +22,7 @@ from PyQt6.QtWidgets import (
 from .components import PageHeader, severity_delegate, style_table, text_button
 from .icons import ICONS, icon_label, set_icon
 from .motion import count_to
+from .pipeline_card import FULL, STRIP, PipelineCard
 from .theme import PAGE_MARGIN, PAGE_SPACING, ThemeManager, set_role
 
 
@@ -369,6 +371,12 @@ class RecentAlertsTimeline(QFrame):
 class Dashboard(QWidget):
     """Dashboard page"""
 
+    # Recent alerts must keep at least this many rows visible before the
+    # pipeline card may show its full graph (otherwise: one-line strip).
+    MIN_ALERT_ROWS = 5
+    ALERT_ROW_H = 36
+    ALERT_CHROME_H = 32 + 10 + 36  # section title + spacing + table header
+
     navigate_to_alerts = pyqtSignal()
     navigate_to_alerts_filtered = pyqtSignal(str)
     navigate_to_settings = pyqtSignal()
@@ -428,12 +436,37 @@ class Dashboard(QWidget):
         self.metrics_row.card_clicked.connect(self._on_metric_clicked)
         layout.addWidget(self.metrics_row)
 
+        self.pipeline_card = PipelineCard()
+        stage_signal = getattr(self.bridge, "pipelineStageUpdated", None)
+        if stage_signal is not None:
+            stage_signal.connect(self.pipeline_card.on_stage_event)
+        layout.addWidget(self.pipeline_card)
+
         self.alerts_timeline = RecentAlertsTimeline()
         self.alerts_timeline.alert_clicked.connect(self.alert_selected.emit)
         layout.addWidget(self.alerts_timeline, 1)
 
         self.setLayout(layout)
         ThemeManager.instance().theme_changed.connect(self._style_progress_bar)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_pipeline_view()
+
+    def _update_pipeline_view(self):
+        """Full graph only while Recent alerts keeps MIN_ALERT_ROWS rows."""
+        lay = self.layout()
+        m = lay.contentsMargins()
+        above = [self.header, self.threat_banner, self.metrics_row]
+        if self.progress_bar.isVisible():
+            above.append(self.progress_bar)
+        used = sum(max(w.sizeHint().height(), w.minimumHeight()) for w in above)
+        used += lay.spacing() * (len(above) + 1)  # gaps incl. card -> alerts
+        table = self.ALERT_CHROME_H + self.MIN_ALERT_ROWS * self.ALERT_ROW_H
+        width = self.width() - m.left() - m.right()
+        free = self.height() - m.top() - m.bottom() - used - table
+        fits = free >= self.pipeline_card.full_height(width)
+        self.pipeline_card.set_auto_view(FULL if fits else STRIP)
 
     def _style_progress_bar(self):
         p = _palette()
