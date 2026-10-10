@@ -228,7 +228,7 @@ SOC Copilot is moving from a purely reactive analysis tool to an active investig
 
 ### 7. Milestone Roadmap (1-4 Week Sprint)
 
-Milestones 1–5 and 5b are done. Milestone 6a (live pipeline graph) is next.
+Milestones 1–5, 5b and 6a are done. Milestone 6b (investigation graph, packet animation, replay) is next.
 
 #### Milestone 1: Reputation and Shodan Agent Implementation — ✅ Done (05/07/2026)
 
@@ -317,10 +317,10 @@ Milestones 1–5 and 5b are done. Milestone 6a (live pipeline graph) is next.
 
 Embed an animated, real-time pipeline graph in the dashboard so analysts can see which stage is active and where an investigation is in flight. It gives immediate feedback during long-running work and makes the system's internal logic transparent — a key differentiator for demos and interviews. Split into two parts.
 
-##### Milestone 6a: Live Pipeline Graph
+##### Milestone 6a: Live Pipeline Graph — ✅ Done (11/10/2026)
 
 - **Goal:** Show the analysis pipeline as a node graph on the dashboard, with each stage lighting up as a batch moves through it.
-- **Files affected:** New `src/soc_copilot/phase4/ui/pipeline_graph.py`; `src/soc_copilot/phase4/ui/dashboard_v2.py`; `src/soc_copilot/phase4/ui/controller_bridge.py`; `src/soc_copilot/phase4/controller/app_controller.py`.
+- **Files affected:** New `src/soc_copilot/phase4/ui/pipeline_graph.py` and `src/soc_copilot/phase4/ui/pipeline_card.py`; `src/soc_copilot/phase4/ui/dashboard_v2.py`; `src/soc_copilot/phase4/ui/controller_bridge.py`; `src/soc_copilot/phase4/controller/app_controller.py` and `schemas.py`; `src/soc_copilot/pipeline.py`.
 - **Estimated complexity:** Medium
 - **Dependencies:** Milestone 5b (UX-3 listener pattern).
 - **Acceptance criteria:**
@@ -329,7 +329,13 @@ Embed an animated, real-time pipeline graph in the dashboard so analysts can see
   - The controller exposes stage listeners (`add_stage_listener` / `remove_stage_listener`) and has no Qt dependency; `ControllerBridge` relays them as a `pipelineStageUpdated` `pyqtSignal`, as UX-3 does for results.
   - Node status (idle / active / done / skipped / failed) changes colour with a short animation; with Reduce motion on, changes are instant.
 - **Risks:** Batches can finish in milliseconds; give each stage a minimum visible time and skip stale runs when events back up.
-- **Status:** Not started
+- **Status:** Done —
+  - **Stages:** nine nodes matching `AppController.process_batch`: Ingest → text lane (Text ML/rules, Brute force) and flow lane (Routing, then the ML pipeline: Preprocess, Features, Detection) → Alerts → Store. IF, RF and the ensemble run per record in one call, so they share the Detection node.
+  - **Controller:** `StageEvent(batch_id, stage, status, detail, data, timestamp)` with statuses active / done / skipped / failed / blocked (kill switch). `SOCCopilot.analyze_file/analyze_records(on_stage=...)` reports Preprocess, Features and Detection; the controller completes any stage the pipeline does not report, and a batch dropped after an ML failure marks Alerts and Store skipped. Stored results reuse the event `batch_id`.
+  - **Graph:** the three ML stages sit in an "ML pipeline" group that collapses into one node showing the current sub-stage and never hiding a failure; it auto-collapses on narrow cards until the analyst toggles it (saved).
+  - **Dashboard card:** between the metric cards and Recent alerts, with a one-line summary ("Last run 21:09:43 · 1,240 logs · 3 alerts · 0.8 s"). The full graph is shown only while Recent alerts keeps at least 5 rows; otherwise a one-line strip of status dots. The chevron choice is saved and wins over the automatic view; the graph has no minimum height, so it never blocks shrinking the window.
+  - **Motion:** each event stays on screen at least 120 ms and a newer run drops an older backlog; node colours fade. With Reduce motion on (or the dashboard hidden) changes are instant.
+  - **Verification:** headless screenshots in dark and light at 1500x950 and 1280x720; suite at 1001 passed, 7 skipped.
 
 ##### Milestone 6b: Investigation Graph, Packet Animation, Replay
 
