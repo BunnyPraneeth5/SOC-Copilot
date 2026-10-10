@@ -203,7 +203,7 @@ The following significant technical debt items have been explicitly addressed an
    - **Where it lived:** `pyproject.toml` and local virtual environments.
    - **The Fix:** A `scikit-learn>=1.3.0` minimum-version constraint was added in `pyproject.toml`, enforcing a compatible floor across developer testing and PyInstaller build pipelines.
 
-The next four were found on 11/10/2026 by running real CICIDS2017 flows through the app's upload path with the trained models (before: 0 alerts on a 375-flow attack scenario; after: 153, and still 0 on 200 benign flows).
+Items 5–9 were found on 11/10/2026 by running real CICIDS2017 flows through the app's upload path with the trained models (before: 0 alerts on a 375-flow attack scenario; after items 5–9: 230, and still 0 on 200 benign flows).
 
 5. **Model features lost by field renaming**
    - **The Problem:** Training names features after the raw CICIDS headers (`flow_bytes/s`, `destination_port`, `fwd_header_length.1`), but the preprocessing field standardizer renames fields (`flow_bytes_s`, `dst_port`, `fwd_header_length_1`). The feature-vector builder looked up the training names, so 11 of 78 features reached the models as 0 on every record (bots, infiltration and many DoS flows were classified Benign).
@@ -225,6 +225,11 @@ The next four were found on 11/10/2026 by running real CICIDS2017 flows through 
    - **Where it lived:** `src/soc_copilot/models/inference/engine.py` (`score_anomaly`).
    - **The Fix:** Scores are calibrated against held-out benign flows (`anomaly_calibration.json`, in the integrity manifest): the score is the share of normal flows that look more normal (0.5 = typical, 0.91 = more unusual than 91% of normal traffic). `train_models.py` writes it; `scripts/calibrate_anomaly.py --dataset cicids2017` calibrates existing models. Without the file the engine falls back to the old mapping and logs a warning.
 
+9. **Confidently classified attacks raised no alert**
+   - **The Problem:** A detection alerted only at High risk, which needs both the classifier and the anomaly score; most port scans and many DoS/DDoS flows look normal to the Isolation Forest, so even at 99% classifier confidence they stayed at Medium risk (P3-Low, no alert). On the held-out CICIDS2017 test split (566,149 flows) only 13.0% of BruteForce and 68.4% of DDoS flows alerted.
+   - **Where it lived:** `src/soc_copilot/models/ensemble/coordinator.py` (`_get_alert_priority`).
+   - **The Fix:** A known attack (not Benign/Unknown) at Medium risk with at least 95% classifier confidence (`EnsembleConfig.confident_attack_min_confidence`) becomes a P2-Medium alert, with a reason saying the traffic itself does not look unusual. Measured on the same split: BruteForce 99.4% and DDoS 99.5% alert; benign false alerts 515 → 709 of 454,620 (0.11% → 0.16%).
+
 ### 5a. Open Items / Known Gaps
 
 - **Alert storage limits:** Alerts and triage status persist to `data/alerts/results.db` (newest 1000 results, in-memory fallback if the database is unavailable); older results are pruned.
@@ -232,7 +237,6 @@ The next four were found on 11/10/2026 by running real CICIDS2017 flows through 
 - **Two intentionally-separate kill switches:** Phase 3 uses a SQLite-backed governance lock (`phase3/governance/killswitch.py`) while Phase 4 uses a `.kill` sentinel file for the emergency analysis stop (`phase4/kill_switch.py`, also reachable via `soc-copilot killswitch`). They serve different purposes and are deliberately not synchronized.
 - **Explainer is CLI-only:** Phase 2 feedback, drift monitoring, and Phase 3 audit logging are wired into the UI (analyst feedback on alert details, drift indicator + audit persistence via `AppController`); only the explainer remains CLI-only.
 - **UI domain investigations:** The orchestrator supports domains, but the alerts-table double-click only reads the source-IP column.
-- **Alerts for confidently classified attacks (decision pending):** A detection alerts only at High risk, which needs both the classifier and the anomaly score; most port scans and many DoS/DDoS flows look normal to the Isolation Forest. On the held-out CICIDS2017 test split (566,149 flows) the current rule alerts on 13.0% of BruteForce and 68.4% of DDoS flows; also alerting on Medium-risk known attacks at ≥ 95% classifier confidence would raise that to 99.4% and 99.5%, with benign false alerts going from 515 to 709 of 454,620 (0.11% → 0.16%).
 - **Malware false positives:** The RF classifies 501 of 454,620 held-out benign flows as Malware (against 378 of 395 real Malware flows detected); these are most of the benign false alerts under any rule.
 - **Drift baseline after calibration:** Drift history recorded before anomaly calibration uses the old score scale, so the drift indicator can report drift until newer inferences replace the baseline window.
 
