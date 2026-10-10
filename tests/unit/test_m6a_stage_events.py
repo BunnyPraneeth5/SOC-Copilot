@@ -332,3 +332,69 @@ class TestPipelineStageHook:
         _stub_copilot().analyze_file(log, on_stage=lambda *a: calls.append(a))
         assert calls[0][:2] == ("preprocess", "active")
         assert calls[-1][:2] == ("detect", "done")
+
+
+# ---------------------------------------------------------------------------
+# ControllerBridge relay
+# ---------------------------------------------------------------------------
+
+class TestBridgeStageRelay:
+    @pytest.fixture()
+    def qapp(self):
+        from PyQt6.QtWidgets import QApplication
+        return QApplication.instance() or QApplication([])
+
+    def test_relays_events_as_signal(self, qapp, controller):
+        from soc_copilot.phase4.ui.controller_bridge import ControllerBridge
+        from tests.qt_helpers import destroy
+
+        bridge = ControllerBridge(controller)
+        received = []
+        bridge.pipelineStageUpdated.connect(received.append)
+
+        result = controller.process_batch(_batch())
+
+        assert received and all(isinstance(e, StageEvent) for e in received)
+        assert received[-1].batch_id == result.batch_id
+        assert (received[-1].stage, received[-1].status) == ("store", "done")
+        destroy(bridge)
+
+    def test_worker_thread_events_arrive_on_ui_thread(self, qapp, controller):
+        import threading
+        from PyQt6.QtTest import QTest
+        from soc_copilot.phase4.ui.controller_bridge import ControllerBridge
+        from tests.qt_helpers import destroy
+
+        bridge = ControllerBridge(controller)
+        threads = []
+        bridge.pipelineStageUpdated.connect(
+            lambda _e: threads.append(threading.current_thread())
+        )
+
+        worker = threading.Thread(target=controller.process_batch, args=(_batch(),))
+        worker.start()
+        worker.join()
+        for _ in range(40):
+            if len(threads) >= len(PIPELINE_STAGES):
+                break
+            QTest.qWait(25)
+
+        assert threads
+        assert set(threads) == {threading.main_thread()}
+        destroy(bridge)
+
+    def test_destroying_bridge_detaches_listener(self, qapp, controller):
+        from soc_copilot.phase4.ui.controller_bridge import ControllerBridge
+        from tests.qt_helpers import destroy
+
+        bridge = ControllerBridge(controller)
+        assert len(controller._stage_listeners) == 1
+        destroy(bridge)
+        assert controller._stage_listeners == []
+        controller.process_batch(_batch())  # no dead-bridge emits
+
+    def test_controller_without_stage_api(self, qapp):
+        from soc_copilot.phase4.ui.controller_bridge import ControllerBridge
+        from tests.qt_helpers import destroy
+
+        destroy(ControllerBridge(Mock(spec=object)))

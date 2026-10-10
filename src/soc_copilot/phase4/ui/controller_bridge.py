@@ -85,6 +85,7 @@ class ControllerBridge(QObject):
     providersChecked = pyqtSignal(object)  # list[ProviderStatus] | None
     resultsUpdated = pyqtSignal()  # results store changed (debounced)
     _resultArrived = pyqtSignal()  # internal: raw listener callback relay
+    pipelineStageUpdated = pyqtSignal(object)  # StageEvent (Milestone 6a)
 
     def __init__(self, controller: AppController):
         super().__init__()
@@ -107,7 +108,22 @@ class ControllerBridge(QObject):
         if callable(add_listener):
             add_listener(lambda _result: self._resultArrived.emit())
 
+        # Live pipeline graph: relay every stage event. Emitted on the
+        # worker thread; Qt queues delivery to slots on the UI thread. Not
+        # debounced — a batch produces only ~20 events.
+        add_stage_listener = getattr(controller, "add_stage_listener", None)
+        remove_stage_listener = getattr(controller, "remove_stage_listener", None)
+        if callable(add_stage_listener):
+            relay = self._on_stage_event
+            add_stage_listener(relay)
+            if callable(remove_stage_listener):
+                # closure, not a bound method: must not touch the dying bridge
+                self.destroyed.connect(lambda *_: remove_stage_listener(relay))
+
         self._check_permissions()
+
+    def _on_stage_event(self, event) -> None:
+        self.pipelineStageUpdated.emit(event)
 
     def _schedule_results_updated(self) -> None:
         """Throttle: start the timer on the first arrival only, so a steady
