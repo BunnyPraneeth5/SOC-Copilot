@@ -14,6 +14,10 @@ from pydantic import BaseModel, Field
 
 from soc_copilot.core.logging import get_logger
 from soc_copilot.security.model_integrity import verify_model_file
+from soc_copilot.models.inference.anomaly_calibration import (
+    AnomalyCalibration,
+    load_calibration,
+)
 
 logger = get_logger(__name__)
 
@@ -101,6 +105,7 @@ class ModelInference:
         self.config = config or InferenceConfig()
         
         self._isolation_forest = None
+        self._anomaly_calibration: AnomalyCalibration | None = None
         self._random_forest = None
         self._feature_order: list[str] = []
         self._label_classes: list[str] = []
@@ -117,6 +122,11 @@ class ModelInference:
         """Get expected feature order."""
         return self._feature_order.copy()
     
+    @property
+    def anomaly_calibrated(self) -> bool:
+        """Whether anomaly scores are calibrated against benign traffic."""
+        return self._anomaly_calibration is not None
+
     @property
     def classes(self) -> list[str]:
         """Get classification classes."""
@@ -151,6 +161,18 @@ class ModelInference:
                 raise RuntimeError(f"Model integrity check failed: {integrity.error}")
             self._isolation_forest = joblib.load(if_path)
             logger.info("isolation_forest_loaded", path=str(if_path))
+            self._anomaly_calibration = load_calibration(models_dir)
+            if self._anomaly_calibration is None:
+                logger.warning(
+                    "anomaly_calibration_missing",
+                    fallback="sigmoid (scores cluster near 0.45-0.55)",
+                    fix="python scripts/calibrate_anomaly.py",
+                )
+            else:
+                logger.info(
+                    "anomaly_calibration_loaded",
+                    samples=self._anomaly_calibration.samples,
+                )
         else:
             logger.warning("isolation_forest_not_found", path=str(if_path))
         
@@ -203,7 +225,9 @@ class ModelInference:
             features: Feature values (dict or array)
             
         Returns:
-            Normalized anomaly score [0, 1]
+            Normalized anomaly score [0, 1]: with a calibration, the share
+            of held-out benign flows that look more normal; otherwise a
+            sigmoid of the raw score (legacy, poorly spread)
         """
         if self._isolation_forest is None:
             logger.warning("isolation_forest_not_loaded")
@@ -223,8 +247,11 @@ class ModelInference:
             return 0.0
         
         raw_score = model.decision_function(X)[0]
-        
-        # Normalize to [0, 1] where higher = more anomalous
+
+        if self._anomaly_calibration is not None:
+            return self._anomaly_calibration(float(raw_score))
+
+        # Legacy normalization to [0, 1] where higher = more anomalous
         normalized = 1 / (1 + np.exp(raw_score))
         
         return float(normalized)

@@ -31,6 +31,10 @@ from soc_copilot.models.training.data_loader import (
 )
 from soc_copilot.core.logging import get_logger
 from soc_copilot.security.model_integrity import REQUIRED_MODEL_FILES, update_manifest
+from soc_copilot.models.inference.anomaly_calibration import (
+    CALIBRATION_FILENAME,
+    calibrate_from_holdout,
+)
 
 logger = get_logger(__name__)
 
@@ -193,7 +197,15 @@ def main():
         # Save model
         if_paths = if_trainer.save()
         print(f"\nIsolation Forest saved to: {if_paths['model']}")
-    
+
+        # Calibrate anomaly scores on held-out benign flows (never trained on)
+        cal_path = calibrate_from_holdout(
+            args.output_dir, if_trainer.model, if_trainer.scaler,
+            X_test[benign_test_mask],
+            source=f"{args.dataset} benign test split (test_size={args.test_size})",
+        )
+        print(f"Anomaly calibration saved to: {cal_path}")
+
     # =========================================================================
     # Train Random Forest (full labeled data)
     # =========================================================================
@@ -235,7 +247,7 @@ def main():
     loader.save_label_mapping(Path(args.output_dir) / "label_map.json")
     
     # Record hashes of the freshly trained artifacts so integrity checks pass
-    update_manifest(args.output_dir, REQUIRED_MODEL_FILES)
+    update_manifest(args.output_dir, [*REQUIRED_MODEL_FILES, CALIBRATION_FILENAME])
     print(f"Model integrity manifest updated: {args.output_dir}/model_hashes.json")
     
     # =========================================================================
