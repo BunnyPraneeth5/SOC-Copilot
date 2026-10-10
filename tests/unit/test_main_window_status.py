@@ -79,11 +79,24 @@ def test_dropped_records_in_details(main_window, mock_controller):
     assert chip.tone == "warn"
 
 
+def _set_admin(window, is_admin):
+    """The bridge's own admin check (run at startup) is the source of truth:
+    get_stats() overrides any permission_check from the controller, so set
+    it here. Otherwise the result depends on whether the test runner is an
+    administrator (GitHub's Windows runners are)."""
+    window.bridge._permission_status = {"has_permission": is_admin}
+
+
 def test_permission_warning_in_details(main_window, mock_controller):
-    mock_controller.get_stats.return_value = _stats(
-        permission_check={"has_permission": False, "error_message": "No admin rights"}
-    )
+    mock_controller.get_stats.return_value = _stats()
+    _set_admin(main_window, False)
     assert "Permissions: Limited" in _chip(main_window, "ingestion").toolTip()
+
+
+def test_no_permission_warning_as_admin(main_window, mock_controller):
+    mock_controller.get_stats.return_value = _stats()
+    _set_admin(main_window, True)
+    assert "Permissions: Limited" not in _chip(main_window, "ingestion").toolTip()
 
 
 def test_status_error_handled_gracefully(main_window, mock_controller):
