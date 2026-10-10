@@ -228,7 +228,7 @@ SOC Copilot is moving from a purely reactive analysis tool to an active investig
 
 ### 7. Milestone Roadmap (1-4 Week Sprint)
 
-Milestones 1–5 and 5b are done. Milestone 6 (live workflow visualization) is next.
+Milestones 1–5 and 5b are done. Milestone 6a (live pipeline graph) is next.
 
 #### Milestone 1: Reputation and Shodan Agent Implementation — ✅ Done (05/07/2026)
 
@@ -305,6 +305,7 @@ Milestones 1–5 and 5b are done. Milestone 6 (live workflow visualization) is n
   - ✅ **Clear logs:** All Logs page button that permanently deletes analysed logs and the alerts found in them (with their triage status) after a confirmation dialog (Cancel is the default; it states the counts and that they will not be shown again). Feedback and the audit trail are kept; every clear is audited (`results_cleared`).
   - ✅ **UI polish pass:** emoji replaced by a themed line-icon set (`icons.py`); shared components (`components.py`) give every page the same header, toolbar, spacing and type scale; tables show severity/status as badges with neutral rows; system status shown once (header chips for pipeline, ingestion, enrichment, kill switch, integrity, providers, drift); Settings rebuilt as cards with one switch style; unused `dashboard_components.py` removed.
 - **Test-suite stability:** The full suite used to die silently near 89% (exit 127 / `0xC0000409`). Cause: a `QTimer.singleShot` lambda in the report drawer fired after the drawer was destroyed; PyQt6 calls `qFatal()` for any unhandled exception in a Qt callback while the default `sys.excepthook` is installed. Fixed by an owned timer; the app now installs a logging excepthook (`soc_copilot.main.install_excepthook`), and `tests/conftest.py` records such exceptions and fails the test where they surface instead of aborting the run. No split-suite strategy is needed. Rule for new UI code: never schedule a lambda that touches a widget with `QTimer.singleShot` — use a timer parented to the widget or a bound method.
+- **CI:** GitHub Actions (`.github/workflows/tests.yml`) runs the full suite offscreen on Windows (Python 3.12) on every push to `main` and every pull request. No secrets are needed; the integration tests that need the local trained models skip themselves ("Models not trained"), so CI reports 906 passed, 15 skipped.
 - **Acceptance criteria:**
   - All UI colours resolve through theme tokens (no hex literals outside `theme.py`, enforced by a test); no emoji in UI code (enforced by a test).
   - `ThemeManager` can switch palettes at runtime via `set_theme()` and re-apply the global stylesheet.
@@ -314,22 +315,55 @@ Milestones 1–5 and 5b are done. Milestone 6 (live workflow visualization) is n
 
 #### Milestone 6: Live Workflow Visualization (PyQt6-native)
 
-- **Goal:** Embed an animated, real-time pipeline graph directly in the dashboard so analysts can see exactly which stage is active and where an investigation is in flight.
-- **Why it matters:** Provides immediate visual feedback during long-running investigations and makes the system's internal logic transparent — a key differentiator for demos and interviews.
-- **Files affected:** New `src/soc_copilot/phase4/ui/pipeline_graph_widget.py`; `src/soc_copilot/phase4/ui/dashboard_v2.py`; `src/soc_copilot/phase4/controller/app_controller.py`.
-- **Estimated complexity:** High
-- **Dependencies:** Milestone 4 (signals infrastructure must exist before wiring).
+Embed an animated, real-time pipeline graph in the dashboard so analysts can see which stage is active and where an investigation is in flight. It gives immediate feedback during long-running work and makes the system's internal logic transparent — a key differentiator for demos and interviews. Split into two parts.
+
+##### Milestone 6a: Live Pipeline Graph
+
+- **Goal:** Show the analysis pipeline as a node graph on the dashboard, with each stage lighting up as a batch moves through it.
+- **Files affected:** New `src/soc_copilot/phase4/ui/pipeline_graph.py`; `src/soc_copilot/phase4/ui/dashboard_v2.py`; `src/soc_copilot/phase4/ui/controller_bridge.py`; `src/soc_copilot/phase4/controller/app_controller.py`.
+- **Estimated complexity:** Medium
+- **Dependencies:** Milestone 5b (UX-3 listener pattern).
 - **Acceptance criteria:**
-  - `PipelineGraphWidget(QGraphicsView)` is embedded in the dashboard with one `QGraphicsScene` per graph.
-  - `NodeItem(QGraphicsItemGroup)` exists for each stage (Parser, Feature Engineering, Isolation Forest, Random Forest, Ensemble, Alert Generator, DB, Recon, Reputation, Shodan, Report Agent); `set_status()` drives node color via `QPropertyAnimation`.
-  - Stage connections are drawn with `QPainterPath` curved lines (n8n-style).
-  - `AppController` emits a `pipeline_stage_updated` Qt signal per stage transition; `PipelineGraphWidget` listens and updates nodes live.
-  - Double-clicking an alert opens a second graph instance showing the investigation sub-pipeline with parallel Recon/Reputation/Shodan branches.
-  - Packet animation: a small `QGraphicsEllipseItem` travels along the connection path between active nodes.
-  - Replay mode: each run logs `(stage, status, timestamp, data)`; a `QTimer` re-emits the signals on demand so any past run can be replayed without re-uploading logs.
-- **Build order:** static graph → real signal wiring → sub-graph on alert double-click → packet animation → replay mode.
-- **Risks:** `QGraphicsScene` performance degrades with many animated items; mitigate by limiting concurrent packet animations and pausing off-screen nodes.
+  - `PipelineGraphWidget(QGraphicsView)` is embedded in the dashboard; stage nodes are joined by curved `QPainterPath` edges (n8n-style); all colours come from theme tokens and follow theme changes.
+  - One node per stage the controller actually runs.
+  - The controller exposes stage listeners (`add_stage_listener` / `remove_stage_listener`) and has no Qt dependency; `ControllerBridge` relays them as a `pipelineStageUpdated` `pyqtSignal`, as UX-3 does for results.
+  - Node status (idle / active / done / skipped / failed) changes colour with a short animation; with Reduce motion on, changes are instant.
+- **Risks:** Batches can finish in milliseconds; give each stage a minimum visible time and skip stale runs when events back up.
 - **Status:** Not started
+
+##### Milestone 6b: Investigation Graph, Packet Animation, Replay
+
+- **Goal:** Extend the graph to investigations and past runs.
+- **Dependencies:** Milestone 6a.
+- **Acceptance criteria:**
+  - Investigating an alert opens a second graph instance for the investigation sub-pipeline: parallel Recon / Reputation / Shodan branches merging into the Report Agent, with skipped and timed-out agents shown distinctly. The orchestrator reports agent transitions through the same listener pattern.
+  - Packet animation: a small `QGraphicsEllipseItem` travels along the edge between active nodes (off with Reduce motion).
+  - Replay: each run records `(stage, status, timestamp, detail)`; a `QTimer` parented to the widget replays a past run without re-uploading logs.
+- **Risks:** `QGraphicsScene` performance degrades with many animated items; mitigate by limiting concurrent packet animations and pausing while the dashboard is hidden.
+- **Status:** Not started
+
+#### Milestone 7: Assistant ↔ LLM
+
+- **Goal:** Connect the Assistant to the configured LLM provider so analysts can ask about their alerts in plain language.
+- **Why it matters:** The Assistant currently answers from fixed templates.
+- **Files affected:** `src/soc_copilot/phase4/ui/assistant_panel.py`, `src/soc_copilot/phase4/ui/controller_bridge.py`, a new assistant module reusing the `ReportLLMAdapter` providers.
+- **Estimated complexity:** Medium
+- **Dependencies:** Milestones 2 and 5.
+- **Acceptance criteria:**
+  - Sandboxed to alerts: the prompt contains only the question and bounded alert/log data from the result store; off-topic questions are refused (see Scope Guardrails).
+  - Read-only: the Assistant cannot change triage status, feedback or logs.
+  - Template fallback: when online enrichment is disabled, the provider is unusable, or the call fails or times out, the current template answers are used and labelled as such.
+  - The LLM call runs off the UI thread (`QThreadPool`).
+- **Risks:** Alert data leaving the machine — gated by the `SOC_COPILOT_ENABLE_ONLINE_ENRICHMENT` opt-in; prompt injection through log contents — log text is passed to the model as data, not instructions.
+- **Status:** Not started
+
+#### Backlog
+
+- **Domain investigations from the UI:** the alerts-table double-click reads only the source-IP column.
+- **Explainer in the UI:** currently CLI-only.
+- **Claude report adapter:** an Anthropic adapter for `ReportAgent` behind `ReportLLMAdapter`.
+- **Calmer colour palette (optional):** an extra theme option alongside dark, light and colour-blind-safe.
+- **Docs consolidation:** merge the ~50 overlapping docs (sprint summaries, quick references, two developer manuals) into this roadmap plus a user manual and a developer manual; move the rest to `docs/archive/`.
 
 ### 8. Risk Analysis
 
@@ -337,7 +371,7 @@ Milestones 1–5 and 5b are done. Milestone 6 (live workflow visualization) is n
 |------|---------------|------------------------|------------------------|
 | **API Rate Limiting** | ReconAgent relies on free `ipwho.is` which heavily rate limits. | Agent returns `PARTIAL` errors constantly; analysts lose GeoIP context. | Strictly enforce the 6-hour `diskcache` in the Orchestrator. Provide config options to use paid GeoIP databases if necessary. |
 | **GUI Deadlocks** | Async API calls are bound to the PyQt6 interface via `QThreadPool`/`QRunnable` workers and `reportReady` signals. | If asyncio loops were run directly on the main UI thread, the application would freeze for up to 30 seconds during report generation. | Keep executing the orchestrator entirely off the main thread, communicating back strictly via `pyqtSignal`. |
-| **LLM Latency** | NVIDIA NIM / OpenRouter API calls in `ReportAgent` take significant time. | Orchestrator timeouts (currently 10s) will kill the ReportAgent before it finishes. | Increase `ReportAgent` specific timeout to 30s. Stream partial UI updates to the user ("Gathering data...", "Analyzing...") so they know the system isn't hung. |
+| **LLM Latency** | NVIDIA NIM / OpenRouter API calls in `ReportAgent` take significant time. The data agents (Recon/Reputation/Shodan) time out after 10s; `ReportAgent` has its own 30s timeout, which also bounds the LLM HTTP call (`mcp/orchestrator.py`). | Responses slower than 30s yield a `TIMEOUT` result, and the analyst sees nothing until the whole investigation finishes. | Keep the 30s `ReportAgent` timeout. Show per-agent progress (Milestone 6b investigation graph) so analysts know the system isn't hung. |
 
 ### 9. Final Recommendations
 
