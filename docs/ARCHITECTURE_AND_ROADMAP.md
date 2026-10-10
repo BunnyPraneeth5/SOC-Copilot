@@ -203,7 +203,7 @@ The following significant technical debt items have been explicitly addressed an
    - **Where it lived:** `pyproject.toml` and local virtual environments.
    - **The Fix:** A `scikit-learn>=1.3.0` minimum-version constraint was added in `pyproject.toml`, enforcing a compatible floor across developer testing and PyInstaller build pipelines.
 
-Items 5–9 were found on 11/10/2026 by running real CICIDS2017 flows through the app's upload path with the trained models (before: 0 alerts on a 375-flow attack scenario; after items 5–9: 230, and still 0 on 200 benign flows).
+Items 5–10 were found on 11/10/2026 by running real CICIDS2017 flows through the app's upload path with the trained models (before: 0 alerts on a 375-flow attack scenario; after items 5–10: 230, and still 0 on 200 benign flows).
 
 5. **Model features lost by field renaming**
    - **The Problem:** Training names features after the raw CICIDS headers (`flow_bytes/s`, `destination_port`, `fwd_header_length.1`), but the preprocessing field standardizer renames fields (`flow_bytes_s`, `dst_port`, `fwd_header_length_1`). The feature-vector builder looked up the training names, so 11 of 78 features reached the models as 0 on every record (bots, infiltration and many DoS flows were classified Benign).
@@ -230,6 +230,11 @@ Items 5–9 were found on 11/10/2026 by running real CICIDS2017 flows through th
    - **Where it lived:** `src/soc_copilot/models/ensemble/coordinator.py` (`_get_alert_priority`).
    - **The Fix:** A known attack (not Benign/Unknown) at Medium risk with at least 95% classifier confidence (`EnsembleConfig.confident_attack_min_confidence`) becomes a P2-Medium alert, with a reason saying the traffic itself does not look unusual. Measured on the same split: BruteForce 99.4% and DDoS 99.5% alert; benign false alerts 515 → 709 of 454,620 (0.11% → 0.16%).
 
+10. **Uncertain Malware guesses raised P1 alerts**
+   - **The Problem:** With heavy class weighting the RF labels ambiguous benign flows Malware at ~55-65% confidence (real Malware is typically ~99%); Malware's severity (0.9) and the severe-threat boost turned those guesses into P1-High alerts. On the held-out split Malware alerts were 378 real and 501 benign.
+   - **Where it lived:** `src/soc_copilot/models/ensemble/coordinator.py`.
+   - **The Fix:** Malware and Exfiltration predictions below 60% confidence (`EnsembleConfig.severe_threat_min_confidence`) keep their class but are scored like an uncertain class (no severe severity, boost or P1 path). Malware alerts: 377 real and 273 benign; all benign false alerts 709 → 481 (0.16% → 0.11%).
+
 ### 5a. Open Items / Known Gaps
 
 - **Alert storage limits:** Alerts and triage status persist to `data/alerts/results.db` (newest 1000 results, in-memory fallback if the database is unavailable); older results are pruned.
@@ -237,7 +242,7 @@ Items 5–9 were found on 11/10/2026 by running real CICIDS2017 flows through th
 - **Two intentionally-separate kill switches:** Phase 3 uses a SQLite-backed governance lock (`phase3/governance/killswitch.py`) while Phase 4 uses a `.kill` sentinel file for the emergency analysis stop (`phase4/kill_switch.py`, also reachable via `soc-copilot killswitch`). They serve different purposes and are deliberately not synchronized.
 - **Explainer is CLI-only:** Phase 2 feedback, drift monitoring, and Phase 3 audit logging are wired into the UI (analyst feedback on alert details, drift indicator + audit persistence via `AppController`); only the explainer remains CLI-only.
 - **UI domain investigations:** The orchestrator supports domains, but the alerts-table double-click only reads the source-IP column.
-- **Malware false positives:** The RF classifies 501 of 454,620 held-out benign flows as Malware (against 378 of 395 real Malware flows detected); these are most of the benign false alerts under any rule.
+- **Remaining benign false alerts:** On the held-out CICIDS2017 test split 481 of 454,620 benign flows (0.11%) still alert: 273 low-to-mid confidence Malware predictions above the 60% floor, 184 BruteForce and 24 DDoS. The source is training with `class_weight="balanced"` (Malware has ~1,600 training rows against ~1.8M benign); softer class weights and a retrain are the next option if this is too noisy on real traffic.
 - **Drift baseline after calibration:** Drift history recorded before anomaly calibration uses the old score scale, so the drift indicator can report drift until newer inferences replace the baseline window.
 
 ---

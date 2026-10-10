@@ -91,6 +91,13 @@ class EnsembleConfig(BaseModel):
     # false alerts 0.11% -> 0.16%.
     confident_attack_min_confidence: float = 0.95
 
+    # Malware/Exfiltration predictions below this confidence are scored like
+    # an uncertain class (no severe-threat severity, boost or P1). With heavy
+    # class weighting the RF labels ambiguous benign flows Malware at ~55-65%
+    # confidence; real Malware is typically ~99%. Measured on the held-out
+    # CICIDS2017 test split: Malware alerts 378 real + 501 false -> 377 + 273.
+    severe_threat_min_confidence: float = 0.6
+
 
 class EnsembleResult(BaseModel):
     """Result from ensemble scoring."""
@@ -173,6 +180,13 @@ class EnsembleCoordinator:
         
         # Get threat severity
         threat_severity = THREAT_SEVERITY.get(result.threat_category, 0.5)
+        uncertain_severe = self._is_uncertain_severe(result.threat_category, class_confidence)
+        if uncertain_severe:
+            threat_severity = THREAT_SEVERITY[ThreatCategory.UNKNOWN]
+            reasoning.append(
+                f"{classification} only {class_confidence:.0%} likely: "
+                "not treated as a severe threat"
+            )
         factors["threat_severity"] = threat_severity
         
         # Classification contribution (only if confident)
@@ -206,6 +220,7 @@ class EnsembleCoordinator:
         
         # Boost risk for high-severity threats with high anomaly
         if (result.threat_category in [ThreatCategory.MALWARE, ThreatCategory.EXFILTRATION]
+            and not uncertain_severe
             and anomaly_score >= self.config.anomaly_medium):
             combined = min(1.0, combined * 1.2)
             reasoning.append("Risk boosted: severe threat with anomalous behavior")
@@ -279,6 +294,13 @@ class EnsembleCoordinator:
         else:
             return RiskLevel.LOW
     
+    def _is_uncertain_severe(self, threat_category: ThreatCategory, confidence: float) -> bool:
+        """Malware/Exfiltration predicted below the severe-threat confidence."""
+        return (
+            threat_category in (ThreatCategory.MALWARE, ThreatCategory.EXFILTRATION)
+            and confidence < self.config.severe_threat_min_confidence
+        )
+
     def _is_confident_attack(
         self,
         risk_level: RiskLevel,
@@ -307,8 +329,9 @@ class EnsembleCoordinator:
             return AlertPriority.P0_CRITICAL
         
         # High-severity threats with high risk
-        if (risk_level == RiskLevel.HIGH and 
-            threat_category in [ThreatCategory.MALWARE, ThreatCategory.EXFILTRATION]):
+        if (risk_level == RiskLevel.HIGH and
+            threat_category in [ThreatCategory.MALWARE, ThreatCategory.EXFILTRATION] and
+            not self._is_uncertain_severe(threat_category, confidence)):
             return AlertPriority.P1_HIGH
         
         # High risk
