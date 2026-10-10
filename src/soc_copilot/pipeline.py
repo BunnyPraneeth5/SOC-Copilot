@@ -6,7 +6,7 @@ into a unified, production-ready pipeline.
 """
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Optional
 import pandas as pd
 import numpy as np
 
@@ -32,6 +32,23 @@ from soc_copilot.models.ensemble import (
 from soc_copilot.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+# on_stage(stage, status, detail) — progress hook for the live pipeline
+# graph. Stages: "preprocess", "features", "detect"; statuses: "active",
+# "done".
+StageCallback = Callable[[str, str, str], None]
+
+
+def _report_stage(
+    on_stage: Optional[StageCallback], stage: str, status: str, detail: str = ""
+) -> None:
+    """Call the progress hook; a failing hook never breaks analysis."""
+    if on_stage is None:
+        return
+    try:
+        on_stage(stage, status, detail)
+    except Exception as e:  # noqa: BLE001 - reporting only
+        logger.warning("stage_callback_failed", stage=stage, error=str(e))
 
 
 # -------------------------------------------------------------------
@@ -175,14 +192,20 @@ class SOCCopilot:
     def analyze_records(
         self,
         records: list[ParsedRecord],
+        on_stage: Optional[StageCallback] = None,
     ) -> tuple[list[AnalysisResult], list[Alert]]:
-        """Analyze parsed log records."""
+        """Analyze parsed log records.
+
+        ``on_stage`` (optional) is told when preprocessing, feature
+        extraction and detection start and finish.
+        """
         if not self._loaded:
             raise RuntimeError("Pipeline not loaded. Call load() first.")
 
         if not records:
             return [], []
 
+        _report_stage(on_stage, "preprocess", "active")
         df = pd.DataFrame([r.raw for r in records])
 
         # Add record metadata
@@ -209,15 +232,25 @@ class SOCCopilot:
         dropped = len(records) - len(df_pre)
         if dropped > 0:
             logger.warning("records_dropped_in_preprocessing", dropped=dropped, total=len(records))
+        _report_stage(
+            on_stage, "preprocess", "done",
+            f"{len(df_pre)} of {len(records)} records kept",
+        )
 
         # Feature engineering
+        _report_stage(on_stage, "features", "active")
         try:
             self._features.fit(df_pre)
             df_feat = self._features.transform(df_pre)
         except Exception as e:
             logger.error("feature_extraction_failed", error=str(e))
             df_feat = df_pre.copy()
+        _report_stage(
+            on_stage, "features", "done",
+            f"{len(self._feature_order)} features",
+        )
 
+        _report_stage(on_stage, "detect", "active")
         results: list[AnalysisResult] = []
         alerts: list[Alert] = []
 
@@ -252,6 +285,10 @@ class SOCCopilot:
             records=len(records),
             results=len(results),
             alerts=len(alerts),
+        )
+        _report_stage(
+            on_stage, "detect", "done",
+            f"{len(results)} results, {len(alerts)} alerts",
         )
 
         return results, alerts
@@ -303,6 +340,7 @@ class SOCCopilot:
     def analyze_file(
         self,
         filepath: str | Path,
+        on_stage: Optional[StageCallback] = None,
     ) -> tuple[list[AnalysisResult], list[Alert], AnalysisStats]:
         filepath = Path(filepath)
         stats = AnalysisStats()
@@ -316,7 +354,7 @@ class SOCCopilot:
         records = parse_log_file(filepath)
         stats.total_records = len(records)
 
-        results, alerts = self.analyze_records(records)
+        results, alerts = self.analyze_records(records, on_stage=on_stage)
 
         stats.processed_records = len(results)
         stats.alerts_generated = len(alerts)

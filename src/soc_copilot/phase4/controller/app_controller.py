@@ -3,12 +3,25 @@
 import time
 import uuid
 from collections import deque
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Dict, Optional, Callable, List
 from pathlib import Path
 
 from soc_copilot.pipeline import AnalysisStats, create_soc_copilot
-from .schemas import AnalysisResult, AlertSummary, PipelineStats, LogSummary
+from .schemas import (
+    AnalysisResult,
+    AlertSummary,
+    PipelineStats,
+    LogSummary,
+    StageEvent,
+    FLOW_ML_STAGES,
+    STAGE_ACTIVE,
+    STAGE_BLOCKED,
+    STAGE_DONE,
+    STAGE_FAILED,
+    STAGE_SKIPPED,
+)
 from .result_store import ResultStore
 
 from soc_copilot.core.logging import get_logger
@@ -76,6 +89,7 @@ class AppController:
         self._drift_recorded = 0
         self._drift_last_report = 0
         self._result_listeners = []
+        self._stage_listeners = []
         self._pipeline = None
         self._text_log_classifier = None
         self._text_log_model_status = {
@@ -149,36 +163,59 @@ class AppController:
     
     def process_batch(self, records: List[dict]) -> Optional[AnalysisResult]:
         """Process batch of raw log records"""
+        batch_id = str(uuid.uuid4())
+
         # Check kill switch
         if self.killswitch_check and self.killswitch_check():
+            if records:
+                self._emit_stage(
+                    batch_id, "ingest", STAGE_BLOCKED, "Kill switch active"
+                )
             return None
-        
+
         if not self._pipeline:
             raise RuntimeError("Pipeline not initialized. Call initialize() first.")
-        
+
         # Extract raw lines
-        raw_lines = [r.get("raw_line", "") for r in records if r.get("raw_line")]
+        with self._stage(batch_id, "ingest") as st:
+            raw_lines = [r.get("raw_line", "") for r in records if r.get("raw_line")]
+            st["detail"] = f"{len(raw_lines)} log lines"
+            st["data"] = {"records": len(raw_lines)}
+            if not raw_lines:
+                st["status"] = STAGE_SKIPPED
         if not raw_lines:
             return None
-        
+
         # Measure processing time
         start_time = time.time()
-        
+
         # Run text log ML detection (falls back to rules if model unavailable)
-        text_log_alerts = self._text_log_ml_detect(raw_lines)
+        with self._stage(batch_id, "text_detect") as st:
+            text_log_alerts = self._text_log_ml_detect(raw_lines)
+            engine = "text model" if self._text_log_classifier else "rules"
+            st["detail"] = f"{engine}: {len(text_log_alerts)} alerts"
+            st["data"] = {"alerts": len(text_log_alerts)}
 
         # Cross-line brute-force aggregation (syslog/Windows one-line-per-
         # attempt formats)
-        bf_agg_alerts = self._aggregate_failed_logins(raw_lines)
-        
+        with self._stage(batch_id, "bf_correlate") as st:
+            bf_agg_alerts = self._aggregate_failed_logins(raw_lines)
+            st["detail"] = f"{len(bf_agg_alerts)} alerts"
+            st["data"] = {"alerts": len(bf_agg_alerts)}
+
         # Analyze batch (using existing ML pipeline). If it fails, keep the
         # text-log/rule alerts instead of discarding the whole batch.
         try:
-            results, alerts, stats = self._analyze_lines(raw_lines)
+            results, alerts, stats = self._analyze_lines(raw_lines, batch_id)
         except Exception as e:
             logger.error("ml_pipeline_batch_failed", lines=len(raw_lines), error=str(e))
             self._dropped_count += len(raw_lines)
             if not text_log_alerts:
+                for stage in ("alerts", "store"):
+                    self._emit_stage(
+                        batch_id, stage, STAGE_SKIPPED,
+                        "Batch dropped: ML step failed, no text alerts",
+                    )
                 return None
             results, alerts, stats = [], [], AnalysisStats()
             stats.total_records = len(raw_lines)
@@ -189,15 +226,18 @@ class AppController:
         self._batches_processed += 1
         
         processing_time = time.time() - start_time
-        
-        # Convert ML alerts to view models
-        alert_summaries = self._convert_alerts(alerts)
-        
-        # Merge text log and aggregated brute-force alerts with
-        # network-flow ML alerts
-        alert_summaries.extend(text_log_alerts)
-        alert_summaries.extend(bf_agg_alerts)
-        
+
+        with self._stage(batch_id, "alerts") as st:
+            # Convert ML alerts to view models
+            alert_summaries = self._convert_alerts(alerts)
+
+            # Merge text log and aggregated brute-force alerts with
+            # network-flow ML alerts
+            alert_summaries.extend(text_log_alerts)
+            alert_summaries.extend(bf_agg_alerts)
+            st["detail"] = f"{len(alert_summaries)} alerts"
+            st["data"] = {"alerts": len(alert_summaries)}
+
         pipeline_stats = self._convert_stats(stats, processing_time)
         pipeline_stats.alerts_generated = len(alert_summaries)
         for ta in (*text_log_alerts, *bf_agg_alerts):
@@ -249,16 +289,23 @@ class AppController:
         
         # Create result
         result = AnalysisResult(
-            batch_id=str(uuid.uuid4()),
+            batch_id=batch_id,
             timestamp=datetime.now(),
             alerts=alert_summaries,
             logs=log_summaries,
             stats=pipeline_stats,
             raw_count=len(raw_lines)
         )
-        
+
         # Store result
-        self.result_store.add(result)
+        with self._stage(batch_id, "store") as st:
+            self.result_store.add(result)
+            st["detail"] = f"{len(raw_lines)} logs, {len(alert_summaries)} alerts"
+            st["data"] = {
+                "records": len(raw_lines),
+                "alerts": len(alert_summaries),
+                "seconds": round(processing_time, 3),
+            }
         self._notify_result_listeners(result)
 
         return result
@@ -289,7 +336,66 @@ class AppController:
                 cb(result)
             except Exception as e:
                 logger.warning(f"Result listener failed: {e}")
-    
+
+    # ------------------------------------------------------------------
+    # Stage listeners (Milestone 6a: live pipeline graph)
+    # ------------------------------------------------------------------
+
+    def add_stage_listener(self, callback) -> None:
+        """Register ``callback(event)`` invoked on each pipeline stage
+        transition; ``event`` is a ``StageEvent``.
+
+        Listeners run on the producing thread — UI code should emit a Qt
+        signal rather than touch widgets directly.
+        """
+        self._stage_listeners.append(callback)
+
+    def remove_stage_listener(self, callback) -> None:
+        """Remove a previously-registered listener (no-op if absent)."""
+        try:
+            self._stage_listeners.remove(callback)
+        except ValueError:
+            pass
+
+    def _emit_stage(
+        self,
+        batch_id: str,
+        stage: str,
+        status: str,
+        detail: str = "",
+        data: Optional[dict] = None,
+    ) -> None:
+        if not batch_id or not self._stage_listeners:
+            return
+        event = StageEvent(
+            batch_id=batch_id,
+            stage=stage,
+            status=status,
+            detail=detail,
+            data=dict(data or {}),
+        )
+        for cb in list(self._stage_listeners):
+            try:
+                cb(event)
+            except Exception as e:
+                logger.warning(f"Stage listener failed: {e}")
+
+    @contextmanager
+    def _stage(self, batch_id: str, stage: str):
+        """Emit ``active`` on entry and ``done`` (or the status set in the
+        yielded dict) on exit; an exception emits ``failed`` and re-raises.
+        """
+        info = {"status": STAGE_DONE, "detail": "", "data": {}}
+        self._emit_stage(batch_id, stage, STAGE_ACTIVE)
+        try:
+            yield info
+        except Exception as e:
+            self._emit_stage(batch_id, stage, STAGE_FAILED, str(e))
+            raise
+        self._emit_stage(
+            batch_id, stage, info["status"], info["detail"], info["data"]
+        )
+
     # ------------------------------------------------------------------
     # Text Log ML Detection
     # ------------------------------------------------------------------
@@ -1028,37 +1134,48 @@ class AppController:
         
         return entry
     
-    def _analyze_lines(self, lines: List[str]):
-        """Analyze lines using existing pipeline"""
+    def _analyze_lines(self, lines: List[str], batch_id: Optional[str] = None):
+        """Analyze lines using existing pipeline.
+
+        With ``batch_id`` set, reports the flow-lane stages (routing,
+        preprocess, features, detect) to stage listeners.
+        """
         import tempfile
         import json
-        
+
         # Route only CICIDS-style flow records to the IF/RF models; text
         # and system log lines produce near-zero feature vectors and are
         # handled by rule/text-log detection instead.
-        flow_entries = []
-        for index, line in enumerate(lines):
-            # Use JSON objects as-is, otherwise extract fields from the raw log
-            try:
-                log_entry = json.loads(line)
-            except (json.JSONDecodeError, TypeError):
-                log_entry = None
-            if not isinstance(log_entry, dict):
-                log_entry = self._parse_raw_log(line)
-            if not self._is_flow_record(log_entry):
-                continue
-            log_entry["_line_index"] = index
-            flow_entries.append(log_entry)
+        with self._stage(batch_id, "flow_route") as st:
+            flow_entries = []
+            for index, line in enumerate(lines):
+                # Use JSON objects as-is, otherwise extract fields from the raw log
+                try:
+                    log_entry = json.loads(line)
+                except (json.JSONDecodeError, TypeError):
+                    log_entry = None
+                if not isinstance(log_entry, dict):
+                    log_entry = self._parse_raw_log(line)
+                if not self._is_flow_record(log_entry):
+                    continue
+                log_entry["_line_index"] = index
+                flow_entries.append(log_entry)
 
-        routed = len(flow_entries)
-        skipped = len(lines) - routed
-        self._flow_records_routed += routed
-        self._non_flow_records += skipped
-        logger.debug(
-            "flow_routing", routed=routed, skipped_non_flow=skipped
-        )
+            routed = len(flow_entries)
+            skipped = len(lines) - routed
+            self._flow_records_routed += routed
+            self._non_flow_records += skipped
+            logger.debug(
+                "flow_routing", routed=routed, skipped_non_flow=skipped
+            )
+            st["detail"] = f"{routed} flow records, {skipped} other"
+            st["data"] = {"routed": routed, "other": skipped}
 
         if not flow_entries:
+            for stage in FLOW_ML_STAGES:
+                self._emit_stage(
+                    batch_id, stage, STAGE_SKIPPED, "No flow records"
+                )
             stats = AnalysisStats()
             stats.total_records = len(lines)
             return [], [], stats
@@ -1069,11 +1186,68 @@ class AppController:
                 f.write(json.dumps(log_entry) + '\n')
             temp_path = f.name
 
+        reported: Dict[str, str] = {}
+
+        def on_stage(stage: str, status: str, detail: str = "") -> None:
+            reported[stage] = status
+            self._emit_stage(batch_id, stage, status, detail)
+
         try:
-            results, alerts, stats = self._pipeline.analyze_file(Path(temp_path))
-            return results, alerts, stats
+            results, alerts, stats = self._pipeline.analyze_file(
+                Path(temp_path), on_stage=on_stage
+            )
+        except Exception as e:
+            self._close_flow_stages(batch_id, reported, error=str(e))
+            raise
         finally:
             Path(temp_path).unlink(missing_ok=True)
+        self._close_flow_stages(
+            batch_id, reported,
+            nothing_parsed=(
+                getattr(stats, "total_records", None) == 0
+                and not results
+                and not alerts
+            ),
+        )
+        return results, alerts, stats
+
+    def _close_flow_stages(
+        self,
+        batch_id: Optional[str],
+        reported: Dict[str, str],
+        error: Optional[str] = None,
+        nothing_parsed: bool = False,
+    ) -> None:
+        """Finish ML stages the pipeline did not report as done.
+
+        On ``error`` the active (or first unreported) stage fails and the
+        rest are skipped. Otherwise unreported stages are marked done, or
+        skipped when the pipeline parsed no records at all.
+        """
+        failed_at = None
+        if error is not None:
+            failed_at = next(
+                (s for s in FLOW_ML_STAGES if reported.get(s) == STAGE_ACTIVE),
+                None,
+            ) or next(
+                (s for s in FLOW_ML_STAGES if s not in reported),
+                FLOW_ML_STAGES[-1],
+            )
+        for stage in FLOW_ML_STAGES:
+            if reported.get(stage) in (STAGE_DONE, STAGE_SKIPPED, STAGE_FAILED):
+                continue
+            if stage == failed_at:
+                self._emit_stage(batch_id, stage, STAGE_FAILED, error)
+            elif error is not None:
+                self._emit_stage(
+                    batch_id, stage, STAGE_SKIPPED, "Skipped after failure"
+                )
+            elif nothing_parsed and not reported:
+                self._emit_stage(
+                    batch_id, stage, STAGE_SKIPPED, "No records parsed"
+                )
+            else:
+                self._emit_stage(batch_id, stage, STAGE_DONE)
     
     def _convert_alerts(self, alerts) -> List[AlertSummary]:
         """Convert pipeline alerts to view models"""

@@ -1,8 +1,46 @@
 """Typed schemas for analysis results (view models only)"""
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional
+from typing import Any, List, Dict, Optional
 from datetime import datetime
+
+
+# Pipeline stages reported to stage listeners (Milestone 6a), in run order.
+# Text lane: text_detect, bf_correlate. Flow lane: flow_route, preprocess,
+# features, detect. Both lanes merge into alerts → store.
+PIPELINE_STAGES = (
+    "ingest",
+    "text_detect",
+    "bf_correlate",
+    "flow_route",
+    "preprocess",
+    "features",
+    "detect",
+    "alerts",
+    "store",
+)
+FLOW_ML_STAGES = ("preprocess", "features", "detect")
+
+STAGE_ACTIVE = "active"
+STAGE_DONE = "done"
+STAGE_SKIPPED = "skipped"
+STAGE_FAILED = "failed"
+STAGE_BLOCKED = "blocked"
+
+
+@dataclass(frozen=True)
+class StageEvent:
+    """One stage transition of one batch (Milestone 6a live pipeline graph).
+
+    ``detail`` is a short human-readable note (tooltip text); ``data``
+    carries numbers for summaries, e.g. ``{"records": 120}``.
+    """
+    batch_id: str
+    stage: str
+    status: str
+    detail: str = ""
+    data: Dict[str, Any] = field(default_factory=dict)
+    timestamp: datetime = field(default_factory=datetime.now)
 
 
 @dataclass
