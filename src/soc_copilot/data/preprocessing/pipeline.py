@@ -152,6 +152,10 @@ class PreprocessingPipeline:
                     "unknown_pipeline_step",
                     step_name=step.name,
                 )
+
+    def get_preprocessor(self, name: str) -> Any | None:
+        """Return the enabled preprocessor for step ``name`` (or None)."""
+        return self._preprocessors.get(name)
     
     @property
     def is_fitted(self) -> bool:

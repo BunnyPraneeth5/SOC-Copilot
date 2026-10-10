@@ -295,16 +295,49 @@ class SOCCopilot:
 
     # ------------------------------------------------------------------
 
+    def _feature_keys(self) -> list[tuple[str, ...]]:
+        """Column names to look up for each model feature, in order.
+
+        Training names features after the raw CICIDS headers
+        ("flow_bytes/s", "destination_port", "fwd_header_length.1"), but
+        preprocessing renames fields ("flow_bytes_s", "dst_port",
+        "fwd_header_length_1"). Each feature is looked up under the name
+        the field standardizer gives it, then under its training name.
+        """
+        cached = getattr(self, "_feature_keys_cache", None)
+        if cached is not None and cached[0] is self._feature_order:
+            return cached[1]
+        get = getattr(self._preprocessing, "get_preprocessor", None)
+        standardizer = get("field_standardizer") if callable(get) else None
+        keys = []
+        for name in self._feature_order:
+            mapped = standardizer.map_field_name(name) if standardizer else None
+            keys.append((mapped, name) if mapped and mapped != name else (name,))
+        seen: dict[str, str] = {}
+        for name, candidates in zip(self._feature_order, keys):
+            if candidates[0] in seen:
+                logger.warning(
+                    "feature_name_collision",
+                    feature=name,
+                    other=seen[candidates[0]],
+                    column=candidates[0],
+                )
+            seen.setdefault(candidates[0], name)
+        self._feature_keys_cache = (self._feature_order, keys)
+        return keys
+
     def _build_feature_vector(self, row: pd.Series) -> np.ndarray:
         """Build feature vector in correct order."""
         vector = np.zeros(len(self._feature_order))
 
-        for i, name in enumerate(self._feature_order):
-            if name in row.index and pd.notna(row[name]):
-                try:
-                    vector[i] = float(row[name])
-                except (TypeError, ValueError):
-                    vector[i] = 0.0
+        for i, candidates in enumerate(self._feature_keys()):
+            for key in candidates:
+                if key in row.index and pd.notna(row[key]):
+                    try:
+                        vector[i] = float(row[key])
+                    except (TypeError, ValueError):
+                        vector[i] = 0.0
+                    break
 
         return vector
 
