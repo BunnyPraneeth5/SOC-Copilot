@@ -120,7 +120,7 @@ Threat intelligence APIs are called in the `mcp` layer. `ReputationAgent` hits V
 - **What it does:** Scans 78-dimensional network flow data to detect anomalies and explicitly classify known attacks (DDoS, BruteForce, Malware, etc.).
 - **Why it was built this way:** The hybrid approach balances detecting known threats (high precision, low false-positive rate via RF) and unknown zero-day anomalies (broad recall via IF).
 - **Inputs/Outputs:** Takes numerical and categorical normalized vectors. Outputs a composite Risk Score (0.0 to 1.0) and a string classification with confidence percentage.
-- **Known limitations:** `src/soc_copilot/models/inference/engine.py` (line 152) — Requires serialized `joblib` artifacts which inherently introduce supply-chain risks, hence the reliance on strict file hash verification. It can also cause high memory spikes during batch loading. The IF/RF pair only produces meaningful output for CICIDS-style flow features; text/system logs are covered mainly by rule detection and the text-log classifier, and records lacking timestamps are dropped by preprocessing before reaching the models.
+- **Known limitations:** `src/soc_copilot/models/inference/engine.py` (line 152) — Requires serialized `joblib` artifacts which inherently introduce supply-chain risks, hence the reliance on strict file hash verification. It can also cause high memory spikes during batch loading. The IF/RF pair only produces meaningful output for CICIDS-style flow features; text/system logs are covered mainly by rule detection and the text-log classifier, and records lacking timestamps are dropped by preprocessing before reaching the models. Anomaly scores are calibrated against held-out benign flows (`anomaly_calibration.json`, see Resolved Technical Debt item 8); flow records are routed to the models from JSON, JSONL and CSV uploads.
 
 #### MCPOrchestrator
 
@@ -203,6 +203,28 @@ The following significant technical debt items have been explicitly addressed an
    - **Where it lived:** `pyproject.toml` and local virtual environments.
    - **The Fix:** A `scikit-learn>=1.3.0` minimum-version constraint was added in `pyproject.toml`, enforcing a compatible floor across developer testing and PyInstaller build pipelines.
 
+The next four were found on 11/10/2026 by running real CICIDS2017 flows through the app's upload path with the trained models (before: 0 alerts on a 375-flow attack scenario; after: 153, and still 0 on 200 benign flows).
+
+5. **Model features lost by field renaming**
+   - **The Problem:** Training names features after the raw CICIDS headers (`flow_bytes/s`, `destination_port`, `fwd_header_length.1`), but the preprocessing field standardizer renames fields (`flow_bytes_s`, `dst_port`, `fwd_header_length_1`). The feature-vector builder looked up the training names, so 11 of 78 features reached the models as 0 on every record (bots, infiltration and many DoS flows were classified Benign).
+   - **Where it lived:** `src/soc_copilot/pipeline.py` (`_build_feature_vector`).
+   - **The Fix:** Each feature is looked up under the name the field standardizer gives it, then its training name; non-finite values become 0 as in training. `tests/unit/test_feature_vector_names.py` checks that every value reaches the model.
+
+6. **CSV uploads never reached the ML pipeline**
+   - **The Problem:** The bridge stores a CSV row as `key=value` text in `raw_line`, and flow routing only parsed that text, so no CSV record was ever routed to the models.
+   - **Where it lived:** `src/soc_copilot/phase4/controller/app_controller.py` (`_analyze_lines`).
+   - **The Fix:** Routing checks the columns the source already parsed (numeric strings converted to numbers) before the text. `raw_line`, the rules, the text model and All Logs are unchanged.
+
+7. **CICIDS2017 web attacks trained as "Unknown"**
+   - **The Problem:** The web-attack labels contain a broken dash (`Web Attack � Brute Force`), matched no label mapping, and were trained as a sixth "Unknown" class (0% of web attacks detected).
+   - **Where it lived:** `src/soc_copilot/models/training/data_loader.py`.
+   - **The Fix:** Labels are normalized before mapping and the three web-attack labels map to BruteForce; models retrained on the full dataset (web attacks ~99.7% correct, other classes unchanged within a few rows).
+
+8. **Flat anomaly scores**
+   - **The Problem:** `1 / (1 + exp(raw))` of the Isolation Forest score squeezed every flow into about 0.42–0.55, so the anomaly signal (40% of the risk score) could never lift a detection to an alert.
+   - **Where it lived:** `src/soc_copilot/models/inference/engine.py` (`score_anomaly`).
+   - **The Fix:** Scores are calibrated against held-out benign flows (`anomaly_calibration.json`, in the integrity manifest): the score is the share of normal flows that look more normal (0.5 = typical, 0.91 = more unusual than 91% of normal traffic). `train_models.py` writes it; `scripts/calibrate_anomaly.py --dataset cicids2017` calibrates existing models. Without the file the engine falls back to the old mapping and logs a warning.
+
 ### 5a. Open Items / Known Gaps
 
 - **Alert storage limits:** Alerts and triage status persist to `data/alerts/results.db` (newest 1000 results, in-memory fallback if the database is unavailable); older results are pruned.
@@ -210,6 +232,9 @@ The following significant technical debt items have been explicitly addressed an
 - **Two intentionally-separate kill switches:** Phase 3 uses a SQLite-backed governance lock (`phase3/governance/killswitch.py`) while Phase 4 uses a `.kill` sentinel file for the emergency analysis stop (`phase4/kill_switch.py`, also reachable via `soc-copilot killswitch`). They serve different purposes and are deliberately not synchronized.
 - **Explainer is CLI-only:** Phase 2 feedback, drift monitoring, and Phase 3 audit logging are wired into the UI (analyst feedback on alert details, drift indicator + audit persistence via `AppController`); only the explainer remains CLI-only.
 - **UI domain investigations:** The orchestrator supports domains, but the alerts-table double-click only reads the source-IP column.
+- **Alerts for confidently classified attacks (decision pending):** A detection alerts only at High risk, which needs both the classifier and the anomaly score; most port scans and many DoS/DDoS flows look normal to the Isolation Forest. On the held-out CICIDS2017 test split (566,149 flows) the current rule alerts on 13.0% of BruteForce and 68.4% of DDoS flows; also alerting on Medium-risk known attacks at ≥ 95% classifier confidence would raise that to 99.4% and 99.5%, with benign false alerts going from 515 to 709 of 454,620 (0.11% → 0.16%).
+- **Malware false positives:** The RF classifies 501 of 454,620 held-out benign flows as Malware (against 378 of 395 real Malware flows detected); these are most of the benign false alerts under any rule.
+- **Drift baseline after calibration:** Drift history recorded before anomaly calibration uses the old score scale, so the drift indicator can report drift until newer inferences replace the baseline window.
 
 ---
 
