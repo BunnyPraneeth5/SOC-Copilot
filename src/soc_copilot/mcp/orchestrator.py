@@ -192,8 +192,8 @@ class MCPOrchestrator:
         shodan: AgentResult,
     ) -> ReportAgent:
         """Create a fresh ReportAgent for one investigation."""
+        # default timeout: the whole model chain (primary + fallback)
         return ReportAgent(
-            timeout=30.0,
             recon=recon,
             reputation=reputation,
             shodan=shodan,
@@ -379,7 +379,8 @@ class MCPOrchestrator:
                 and isinstance(report_result.data, ThreatReport)
             ):
                 self._cache.set_report(target, report_result.data)
-                _report_stage(on_stage, "report", "done")
+                model = report_result.data.llm_model
+                _report_stage(on_stage, "report", "done", f"Model: {model}" if model else "")
                 return report_result.data
 
             report_error = (

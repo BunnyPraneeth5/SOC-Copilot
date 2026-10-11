@@ -84,7 +84,9 @@ def test_keys_set_are_configured(monkeypatch: pytest.MonkeyPatch):
 
     assert all(s.state is ProviderState.CONFIGURED for s in statuses.values())
     assert "nvidia_nim" in statuses["report_llm"].detail
-    assert "meta/llama-3.1-8b-instruct" in statuses["report_llm"].detail
+    # meta/llama-3.1-8b-instruct was retired; new default + NVIDIA fallback
+    assert "nvidia/nemotron-3-super-120b-a12b" in statuses["report_llm"].detail
+    assert "fallback: deepseek-ai/deepseek-v4.1-flash" in statuses["report_llm"].detail
 
 
 def test_openrouter_provider_uses_its_key(monkeypatch: pytest.MonkeyPatch):

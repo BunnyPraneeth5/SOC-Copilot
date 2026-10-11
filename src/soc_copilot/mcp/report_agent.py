@@ -8,8 +8,10 @@ ThreatReport with severity classification.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import time
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -18,7 +20,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from soc_copilot.mcp.base_agent import BaseAgent
-from soc_copilot.mcp.exceptions import AgentLookupError, APIKeyMissingError
+from soc_copilot.mcp.exceptions import AgentLookupError, APIKeyMissingError, MCPError
 from soc_copilot.mcp.models import (
     AgentResult,
     AgentStatus,
@@ -34,6 +36,14 @@ log = structlog.get_logger(__name__)
 # Free-tier models are used for development and demos, so keep the prompt
 # explicit about source limits and JSON shape. The production Claude adapter
 # should use the same prompt contract when it is added.
+# Report LLM chain (defaults chosen by benchmarking the real ReportAgent on
+# NVIDIA's free tier, Oct 2026; override with NVIDIA_NIM_MODEL and
+# NVIDIA_NIM_FALLBACK_MODEL)
+DEFAULT_NVIDIA_MODEL = "nvidia/nemotron-3-super-120b-a12b"
+DEFAULT_NVIDIA_FALLBACK_MODEL = "deepseek-ai/deepseek-v4.1-flash"
+REPORT_ATTEMPT_TIMEOUT = 30.0   # per model
+REPORT_TOTAL_TIMEOUT = 65.0     # whole chain (primary + one fallback)
+
 REPORT_SYSTEM_PROMPT = (
     "You are a senior SOC analyst producing a structured threat assessment "
     "from machine-provided threat intelligence.\n\n"
@@ -166,7 +176,8 @@ class OpenAICompatibleReportAdapter:
         self.provider_name = provider_name
         self.base_url = base_url.rstrip("/")
         self.api_key_env = api_key_env
-        self.model = os.environ.get(model_env, default_model)
+        self.model_env = model_env
+        self.model = os.environ.get(model_env, default_model) if model_env else default_model
         self.timeout = timeout
 
     async def complete(self, system_prompt: str, user_prompt: str) -> str:
@@ -201,7 +212,15 @@ class OpenAICompatibleReportAdapter:
             return body["choices"][0]["message"]["content"]
         except httpx.HTTPStatusError as exc:
             status = exc.response.status_code
-            detail = "HTTP 429 rate limit" if status == 429 else f"HTTP {status}"
+            if status == 429:
+                detail = "HTTP 429 rate limit"
+            elif status == 410:
+                detail = (f"HTTP 410: model '{self.model}' has been retired by the "
+                          f"provider (set {self.model_env or 'the model'} to a current model)")
+            elif status == 404:
+                detail = f"HTTP 404: model '{self.model}' is not available to this API key"
+            else:
+                detail = f"HTTP {status}"
             raise AgentLookupError(
                 "ReportAgent", self.provider_name, detail
             ) from exc
@@ -220,6 +239,8 @@ class ReportLLMSettings:
     api_key_env: str
     model_env: str
     default_model: str
+    fallback_model_env: str = ""
+    default_fallback_model: str = ""
 
 
 def resolve_report_llm_settings() -> ReportLLMSettings:
@@ -241,7 +262,12 @@ def resolve_report_llm_settings() -> ReportLLMSettings:
             ),
             api_key_env="NVIDIA_API_KEY",
             model_env="NVIDIA_NIM_MODEL",
-            default_model="meta/llama-3.1-8b-instruct",
+            # meta/llama-3.1-8b-instruct was retired (HTTP 410, Oct 2026).
+            # Both chosen by a benchmark of the real ReportAgent on NVIDIA's
+            # free tier: valid structured reports within the 30 s budget.
+            default_model=DEFAULT_NVIDIA_MODEL,
+            fallback_model_env="NVIDIA_NIM_FALLBACK_MODEL",
+            default_fallback_model=DEFAULT_NVIDIA_FALLBACK_MODEL,
         )
 
     if provider == "openrouter":
@@ -253,6 +279,7 @@ def resolve_report_llm_settings() -> ReportLLMSettings:
             api_key_env="OPENROUTER_API_KEY",
             model_env="OPENROUTER_MODEL",
             default_model="meta-llama/llama-3.1-8b-instruct:free",
+            fallback_model_env="OPENROUTER_FALLBACK_MODEL",
         )
 
     raise AgentLookupError(
@@ -262,8 +289,61 @@ def resolve_report_llm_settings() -> ReportLLMSettings:
     )
 
 
+def report_llm_chain_models() -> list[tuple[str, str]]:
+    """(provider, model) of each step of the report LLM chain, in order."""
+    return [(a.provider_name, a.model) for a in build_report_llm_chain(REPORT_ATTEMPT_TIMEOUT)]
+
+
+def build_report_llm_chain(timeout: float) -> list[ReportLLMAdapter]:
+    """Adapters to try in order: primary model, its fallback model (same
+    provider, same key), then optionally another provider.
+
+    - ``NVIDIA_NIM_FALLBACK_MODEL`` / ``OPENROUTER_FALLBACK_MODEL``: second
+      model of the same provider; set empty to disable.
+    - ``REPORT_LLM_FALLBACK_PROVIDER``: another provider tried last. Never
+      automatic: it sends alert data to a second company.
+    """
+    primary = resolve_report_llm_settings()
+    chain: list[ReportLLMAdapter] = []
+
+    def add(settings: ReportLLMSettings, model_env: str, default: str) -> None:
+        adapter = OpenAICompatibleReportAdapter(
+            provider_name=settings.provider,
+            base_url=settings.base_url,
+            api_key_env=settings.api_key_env,
+            default_model=default,
+            model_env=model_env,
+            timeout=timeout,
+        )
+        if adapter.model and all(
+            (a.provider_name, a.model) != (adapter.provider_name, adapter.model) for a in chain
+        ):
+            chain.append(adapter)
+
+    add(primary, primary.model_env, primary.default_model)
+    if primary.fallback_model_env:
+        add(primary, primary.fallback_model_env, primary.default_fallback_model)
+
+    other = os.environ.get("REPORT_LLM_FALLBACK_PROVIDER", "").strip().lower()
+    if other and other != primary.provider:
+        previous = os.environ.get("REPORT_LLM_PROVIDER")
+        os.environ["REPORT_LLM_PROVIDER"] = other
+        try:
+            secondary = resolve_report_llm_settings()
+        except AgentLookupError:
+            secondary = None
+        finally:
+            if previous is None:
+                os.environ.pop("REPORT_LLM_PROVIDER", None)
+            else:
+                os.environ["REPORT_LLM_PROVIDER"] = previous
+        if secondary is not None:
+            add(secondary, secondary.model_env, secondary.default_model)
+    return chain
+
+
 def build_report_llm_adapter(timeout: float) -> ReportLLMAdapter:
-    """Build the configured LLM adapter for ReportAgent."""
+    """Build the configured primary LLM adapter (first step of the chain)."""
     settings = resolve_report_llm_settings()
     return OpenAICompatibleReportAdapter(
         provider_name=settings.provider,
@@ -431,21 +511,66 @@ class ReportAgent(BaseAgent):
     """
 
     name: str = "ReportAgent"
-    timeout: float = 30.0
+    timeout: float = REPORT_TOTAL_TIMEOUT
 
     def __init__(
         self,
-        timeout: float = 30.0,
+        timeout: float = REPORT_TOTAL_TIMEOUT,
         recon: AgentResult | None = None,
         reputation: AgentResult | None = None,
         shodan: AgentResult | None = None,
         llm_adapter: ReportLLMAdapter | None = None,
+        llm_adapters: list[ReportLLMAdapter] | None = None,
+        attempt_timeout: float = REPORT_ATTEMPT_TIMEOUT,
     ) -> None:
         self.timeout = timeout
+        self.attempt_timeout = attempt_timeout
         self._recon = recon
         self._reputation = reputation
         self._shodan = shodan
-        self._llm_adapter = llm_adapter or build_report_llm_adapter(timeout)
+        if llm_adapters:
+            self._llm_adapters = list(llm_adapters)
+        elif llm_adapter is not None:
+            self._llm_adapters = [llm_adapter]
+        else:
+            self._llm_adapters = build_report_llm_chain(attempt_timeout)
+        self._llm_adapter = self._llm_adapters[0]  # primary
+
+    async def _run_chain(self, target: str, user_prompt: str):
+        """Try each model in turn within the time budget.
+
+        An HTTP error, a timeout or an answer the evidence checks reject all
+        move on to the next model. Raises AgentLookupError naming every
+        attempt when none succeeds.
+        """
+        start = time.monotonic()
+        failures: list[str] = []
+        for i, adapter in enumerate(self._llm_adapters):
+            remaining = self.timeout - (time.monotonic() - start) - 0.5
+            if remaining < 1.0:
+                failures.append(f"{adapter.model}: no time left")
+                break
+            budget = min(self.attempt_timeout, remaining)
+            log.info("report_start", target=target, provider=adapter.provider_name,
+                     model=adapter.model, attempt=i + 1, of=len(self._llm_adapters))
+            try:
+                raw = await asyncio.wait_for(
+                    adapter.complete(REPORT_SYSTEM_PROMPT, user_prompt), timeout=budget
+                )
+                response = self._parse_llm_response(raw)
+                self._validate_evidence(response)
+            except asyncio.TimeoutError:
+                failures.append(f"{adapter.model}: no answer within {budget:.0f}s")
+            except (MCPError, ValueError) as exc:
+                failures.append(f"{adapter.model}: {exc}")
+            else:
+                if i:
+                    log.info("report_fallback_used", target=target, model=adapter.model,
+                             skipped=failures)
+                return adapter, response
+            log.warning("report_attempt_failed", target=target, model=adapter.model,
+                        error=failures[-1])
+        raise AgentLookupError("ReportAgent", "LLM", "; ".join(failures))
 
     def _agent_result_for_prompt(
         self, result: AgentResult | None, agent_name: str
@@ -883,20 +1008,9 @@ class ReportAgent(BaseAgent):
                 ),
             )
 
-        log.info(
-            "report_start",
-            target=target,
-            provider=self._llm_adapter.provider_name,
-            model=self._llm_adapter.model,
-        )
-
         try:
             user_prompt = self._build_user_prompt(target)
-            raw_response = await self._llm_adapter.complete(
-                REPORT_SYSTEM_PROMPT, user_prompt
-            )
-            llm_response = self._parse_llm_response(raw_response)
-            self._validate_evidence(llm_response)
+            adapter, llm_response = await self._run_chain(target, user_prompt)
 
             report = ThreatReport(
                 target=target,
@@ -906,7 +1020,7 @@ class ReportAgent(BaseAgent):
                 recon=self._recon.data if self._recon else None,
                 reputation=self._reputation.data if self._reputation else None,
                 shodan=self._shodan.data if self._shodan else None,
-                llm_model=self._llm_adapter.model,
+                llm_model=adapter.model,
             )
 
             return AgentResult(

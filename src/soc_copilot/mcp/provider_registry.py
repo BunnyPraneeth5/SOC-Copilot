@@ -16,7 +16,10 @@ from enum import Enum
 import httpx
 
 from soc_copilot.mcp.exceptions import AgentLookupError
-from soc_copilot.mcp.report_agent import resolve_report_llm_settings
+from soc_copilot.mcp.report_agent import (
+    report_llm_chain_models,
+    resolve_report_llm_settings,
+)
 from soc_copilot.security.network import online_enrichment_enabled
 
 _PROBE_TTL_SECONDS = 60
@@ -108,13 +111,17 @@ def get_provider_statuses() -> list[ProviderStatus]:
         )
     else:
         api_key_env = settings.api_key_env
-        model = os.environ.get(settings.model_env, settings.default_model)
+        chain = report_llm_chain_models()
+        model = chain[0][1] if chain else settings.default_model
+        fallbacks = ", ".join(m if prov == settings.provider else f"{prov}: {m}"
+                              for prov, m in chain[1:])
         if os.environ.get(api_key_env):
             statuses.append(
                 ProviderStatus(
                     "report_llm", "Report LLM", "ReportAgent",
                     ProviderState.CONFIGURED,
-                    f"{settings.provider} ({model})",
+                    f"{settings.provider} ({model})"
+                    + (f"; fallback: {fallbacks}" if fallbacks else ""),
                 )
             )
         else:
