@@ -4,8 +4,10 @@ Tracks changes in model outputs and feature distributions over time.
 Does NOT affect detection, scoring, thresholds, or alerts.
 """
 
+import functools
 import json
 import sqlite3
+import threading
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
@@ -13,6 +15,21 @@ from pathlib import Path
 from soc_copilot.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _locked(method):
+    """Serialize use of the monitor's single SQLite connection.
+
+    The connection is shared across threads (check_same_thread=False):
+    analysis batches from uploads and from live system-log ingestion, and
+    status reads from the UI. Concurrent use raised "bad parameter or other
+    API misuse" and lost drift records.
+    """
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return wrapper
 
 
 class DriftLevel(str, Enum):
@@ -85,6 +102,7 @@ class DriftMonitor:
         """
         self.db_path = Path(db_path)
         self._connection: sqlite3.Connection | None = None
+        self._lock = threading.RLock()
     
     def _get_connection(self):
         """Get or create database connection."""
@@ -94,6 +112,7 @@ class DriftMonitor:
             self._connection.row_factory = sqlite3.Row
         return self._connection
     
+    @_locked
     def initialize(self):
         """Initialize database schema."""
         conn = self._get_connection()
@@ -120,6 +139,7 @@ class DriftMonitor:
         conn.commit()
         logger.info("drift_monitor_initialized", db_path=str(self.db_path))
     
+    @_locked
     def record_inference(self, anomaly_score: float, risk_score: float, 
                         predicted_class: str, priority: str):
         """Record inference output for drift tracking.
@@ -139,6 +159,7 @@ class DriftMonitor:
         )
         conn.commit()
     
+    @_locked
     def compute_drift_report(self, window_size: int = 100, baseline_size: int = 100):
         """Compute drift report comparing current window to baseline.
         
@@ -271,6 +292,7 @@ class DriftMonitor:
         
         return diff / 2  # Normalize to [0, 1]
     
+    @_locked
     def _save_report(self, report: DriftReport):
         """Save drift report to database."""
         conn = self._get_connection()
@@ -280,6 +302,7 @@ class DriftMonitor:
         )
         conn.commit()
     
+    @_locked
     def get_latest_report(self) -> DriftReport | None:
         """Get most recent drift report."""
         conn = self._get_connection()
@@ -310,6 +333,7 @@ class DriftMonitor:
         
         return report
     
+    @_locked
     def get_report_history(self, limit: int = 10) -> list[dict]:
         """Get historical drift reports.
         
@@ -327,6 +351,7 @@ class DriftMonitor:
         
         return [json.loads(row["report_json"]) for row in cursor.fetchall()]
     
+    @_locked
     def close(self):
         """Close database connection."""
         if self._connection:

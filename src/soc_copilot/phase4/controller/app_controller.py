@@ -1,5 +1,6 @@
 """Application controller orchestrating ingestion → analysis → results"""
 
+import threading
 import time
 import uuid
 from collections import deque
@@ -88,6 +89,10 @@ class AppController:
         self.audit_logger = audit_logger
         self._drift_recorded = 0
         self._drift_last_report = 0
+        # One analysis at a time: uploads (bridge worker) and live system-log
+        # ingestion (its own thread) both call process_batch; their state
+        # (brute-force counters, stats, drift, stage events) must not interleave.
+        self._batch_lock = threading.RLock()
         self._result_listeners = []
         self._stage_listeners = []
         self._pipeline = None
@@ -162,7 +167,11 @@ class AppController:
             self._flow_feature_names = None
     
     def process_batch(self, records: List[dict]) -> Optional[AnalysisResult]:
-        """Process batch of raw log records"""
+        """Process batch of raw log records (one batch at a time)."""
+        with self._batch_lock:
+            return self._process_batch(records)
+
+    def _process_batch(self, records: List[dict]) -> Optional[AnalysisResult]:
         batch_id = str(uuid.uuid4())
 
         # Check kill switch
@@ -1379,6 +1388,10 @@ class AppController:
         Returns the number of logs and alerts removed. Feedback history
         and the audit trail are separate stores and are kept.
         """
+        with self._batch_lock:  # never clear in the middle of a batch
+            return self._clear_results(actor)
+
+    def _clear_results(self, actor: str) -> dict:
         results = self.result_store.get_all()
         removed = {
             "logs": sum(len(getattr(r, "logs", []) or []) for r in results),
