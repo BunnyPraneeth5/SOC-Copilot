@@ -95,11 +95,11 @@ flowchart TD
     F --> |Class & Confidence| G
     G --> |Risk Score > Threshold| H[Alert Generator]
     H --> I[Deduplication Window]
-    I --> J[ResultStore: SQLite results.db, newest 1000]
+    I --> J[ResultStore: SQLite results.db, 1000 results, alert-free evicted first]
     J --> K[PyQt6 Dashboard]
 ```
 
-- **Why it is built this way:** The bifurcated ML approach (Isolation Forest alongside Random Forest) ensures the system can detect zero-day anomalies (via IF) while retaining high-precision categorization for known threats like DDoS or BruteForce (via RF). Deduplication occurs post-generation to prevent alert storms and analyst fatigue. Results (logs, alerts and their triage status) are persisted by `ResultStore` (`src/soc_copilot/phase4/controller/result_store.py`) to `data/alerts/results.db`, keeping the newest 1000 results, with an in-memory fallback if the database is unavailable. Governance, drift and feedback data live in their own SQLite stores.
+- **Why it is built this way:** The bifurcated ML approach (Isolation Forest alongside Random Forest) ensures the system can detect zero-day anomalies (via IF) while retaining high-precision categorization for known threats like DDoS or BruteForce (via RF). Deduplication occurs post-generation to prevent alert storms and analyst fatigue. Results (logs, alerts and their triage status) are persisted by `ResultStore` (`src/soc_copilot/phase4/controller/result_store.py`) to `data/alerts/results.db`, keeping 1000 results (when full, the oldest alert-free results go first, so alerts and their triage outlive routine system-log batches), with an in-memory fallback if the database is unavailable. Governance, drift and feedback data live in their own SQLite stores.
 
 #### MCP Orchestrator & Async Coordination
 
@@ -111,7 +111,7 @@ The `MCPOrchestrator` uses Python's `asyncio.gather()` to run `ReconAgent`, `Rep
 
 Threat intelligence APIs are called in the `mcp` layer. `ReputationAgent` hits VirusTotal and AbuseIPDB, while `ReconAgent` handles WHOIS/GeoIP.
 
-- **Why this separation?** It limits blast radius. If VirusTotal revokes an API key, only `ReputationAgent` suffers a `PARTIAL` failure state. The `ReportAgent` then accepts these disjointed outputs (via Pydantic `BaseModel` objects) and feeds them into the configured OpenAI-compatible LLM provider (NVIDIA NIM or OpenRouter, selected via `REPORT_LLM_PROVIDER`) to synthesize a final `ThreatReport`. A Claude/Anthropic adapter is not yet implemented.
+- **Why this separation?** It limits blast radius. If VirusTotal revokes an API key, only `ReputationAgent` suffers a `PARTIAL` failure state. The `ReportAgent` then accepts these disjointed outputs (via Pydantic `BaseModel` objects) and feeds them into the configured OpenAI-compatible LLM provider (NVIDIA NIM or OpenRouter, selected via `REPORT_LLM_PROVIDER`) to synthesize a final `ThreatReport`, trying a fallback model when the primary fails (see ReportAgent). A Claude/Anthropic adapter is not yet implemented.
 
 ### 3. Component Deep Dives
 
@@ -155,11 +155,12 @@ Threat intelligence APIs are called in the `mcp` layer. `ReputationAgent` hits V
 - **What it does:** Synthesizes the raw data from the other three agents using an OpenAI-compatible LLM provider — NVIDIA NIM or OpenRouter, selected via `REPORT_LLM_PROVIDER`. A Claude/Anthropic adapter is not implemented yet (open item).
 - **Why it was built this way:** Analysts need immediate context and actionable summaries, not just raw JSON blocks. The LLM translates raw intelligence into a severity-rated (CRITICAL/HIGH/MEDIUM/LOW) tactical assessment.
 - **Inputs/Outputs:** Takes aggregated `ReconResult`, `ReputationResult`, and `ShodanResult`. Outputs a final `ThreatReport`.
-- **Known limitations:** `src/soc_copilot/mcp/report_agent.py` — Implemented. High latency expected from the hosted LLM providers (calls can take 15-30s), requiring a longer agent timeout (30s).
+- **Model chain:** primary `NVIDIA_NIM_MODEL` (default `nvidia/nemotron-3-super-120b-a12b`), then `NVIDIA_NIM_FALLBACK_MODEL` (default `deepseek-ai/deepseek-v4.1-flash`, same key; empty disables it), then optionally `REPORT_LLM_FALLBACK_PROVIDER` (never automatic: it sends alert data to a second company). An HTTP error, a timeout or an answer the evidence checks reject moves to the next model; 30 s per model, 65 s for the chain. The report records the model used.
+- **Known limitations:** `src/soc_copilot/mcp/report_agent.py` — High latency on the free tiers (the benchmark default took 15–18 s; others 23–77 s or not at all). Hosted models get retired (`meta/llama-3.1-8b-instruct` returned HTTP 410 in Oct 2026); a 410 now says so and names the variable to change.
 
 #### PyQt6 GUI
 
-- **What it does:** Provides the desktop application: Dashboard, Alerts (paginated, filterable, exportable, with triage status), Investigation details, investigation report side drawer, Assistant, All Logs (with Clear logs) and Settings, plus header status chips and system-tray notifications.
+- **What it does:** Provides the desktop application: Dashboard (with the live Pipeline graph), Alerts (paginated, filterable, exportable, with triage status), Investigation details, investigation report side drawer (with the investigation steps graph), Assistant, All Logs (with Clear logs) and Settings, plus header status chips and system-tray notifications.
 - **Why it was built this way:** To meet the strict "offline desktop-first" requirement. PyQt6 is robust, cross-platform, and allows for complex table rendering required for log analysis.
 - **Inputs/Outputs:** Takes user clicks and file paths. Outputs rendered data tables and status, and sends requests to the ControllerBridge.
 - **Design system:** colours come only from theme tokens (`theme.py`, light/dark + colour-blind-safe), icons from `icons.py` (Feather, no emoji), and shared building blocks from `components.py` (page header, table badges, switches, settings cards). Hex-colour and emoji guard tests enforce this.
@@ -235,9 +236,33 @@ Items 5–10 were found on 11/10/2026 by running real CICIDS2017 flows through t
    - **Where it lived:** `src/soc_copilot/models/ensemble/coordinator.py`.
    - **The Fix:** Malware and Exfiltration predictions below 60% confidence (`EnsembleConfig.severe_threat_min_confidence`) keep their class but are scored like an uncertain class (no severe severity, boost or P1 path). Malware alerts: 377 real and 273 benign; all benign false alerts 709 → 481 (0.16% → 0.11%).
 
+Items 11–14 were found on 12/10/2026 running the app with administrator rights, online enrichment and live system-log ingestion enabled.
+
+11. **Two analyses at once**
+   - **The Problem:** Live system-log batches called `AppController.process_batch` from the ingestion thread while uploads ran on the bridge worker, so batches overlapped: shared controller state, interleaved stage events, and "bad parameter or other API misuse" from the drift monitor's shared SQLite connection (drift records lost).
+   - **Where it lived:** `phase4/controller/app_controller.py`, `phase2/drift/monitor.py`.
+   - **The Fix:** One lock in the controller (batches run one at a time; `clear_results` waits for a running batch) and one around every drift-monitor database call.
+
+12. **Alerts deleted after ~80 minutes with system logs on**
+   - **The Problem:** Every batch is stored as a result and the store kept the newest 1000, so with a batch every ~5 s uploaded files' alerts and their triage were pruned after ~83 minutes.
+   - **Where it lived:** `phase4/controller/result_store.py`.
+   - **The Fix:** When full, the oldest alert-free results go first, in memory and in `results.db`.
+
+13. **Retired report model**
+   - **The Problem:** NVIDIA retired `meta/llama-3.1-8b-instruct` (HTTP 410), so every AI report failed and investigations ended with partial reports.
+   - **Where it lived:** `mcp/report_agent.py` default and `.env`.
+   - **The Fix:** New default `nvidia/nemotron-3-super-120b-a12b` (benchmarked with the real ReportAgent: 15–18 s, valid HIGH report) and the model chain with `deepseek-ai/deepseek-v4.1-flash` as NVIDIA fallback; clear 404/410 messages; `.env.example` updated and its never-read settings removed.
+
+14. **System-log exporters started with ingestion disabled**
+   - **The Problem:** `launch_ui.py` started the PowerShell exporters whenever the app had admin rights, even with `enabled: false` in `config/ingestion/system_logs.yaml`; nothing read their output, and the log reported a misleading failure.
+   - **Where it lived:** `launch_ui.py`.
+   - **The Fix:** Exporters and ingestion start only when the config enables them; otherwise the log says so.
+
 ### 5a. Open Items / Known Gaps
 
-- **Alert storage limits:** Alerts and triage status persist to `data/alerts/results.db` (newest 1000 results, in-memory fallback if the database is unavailable); older results are pruned.
+- **Alert storage limits:** Alerts and triage status persist to `data/alerts/results.db` (1000 results, in-memory fallback if the database is unavailable). When full, alert-free results are pruned first; only a store full of results with alerts drops its oldest alerts.
+- **Console debug output:** structlog prints `debug` lines (e.g. `flow_routing` every few seconds with system logs on); there is no setting for the console log level (the old `SOC_COPILOT_LOG_LEVEL` in `.env.example` was never read and has been removed).
+- **Enrichment providers:** Shodan returns HTTP 403 intermittently for some IPs on the current plan, and GeoIP (ipwho.is) often times out; both are handled as failed/partial agents. The GeoIP warning logs an empty message for timeouts.
 - **Claude/Anthropic adapter:** `ReportAgent` supports NVIDIA NIM and OpenRouter; an Anthropic adapter behind the same `ReportLLMAdapter` interface is not implemented.
 - **Two intentionally-separate kill switches:** Phase 3 uses a SQLite-backed governance lock (`phase3/governance/killswitch.py`) while Phase 4 uses a `.kill` sentinel file for the emergency analysis stop (`phase4/kill_switch.py`, also reachable via `soc-copilot killswitch`). They serve different purposes and are deliberately not synchronized.
 - **Explainer is CLI-only:** Phase 2 feedback, drift monitoring, and Phase 3 audit logging are wired into the UI (analyst feedback on alert details, drift indicator + audit persistence via `AppController`); only the explainer remains CLI-only.
@@ -262,7 +287,7 @@ SOC Copilot is moving from a purely reactive analysis tool to an active investig
 
 ### 7. Milestone Roadmap (1-4 Week Sprint)
 
-Milestones 1–5, 5b and 6a are done. Milestone 6b (investigation graph, packet animation, replay) is next.
+Milestones 1–5, 5b, 6a and 6b are done. Milestone 7 (Assistant ↔ LLM) is next.
 
 #### Milestone 1: Reputation and Shodan Agent Implementation — ✅ Done (05/07/2026)
 
@@ -339,7 +364,7 @@ Milestones 1–5, 5b and 6a are done. Milestone 6b (investigation graph, packet 
   - ✅ **Clear logs:** All Logs page button that permanently deletes analysed logs and the alerts found in them (with their triage status) after a confirmation dialog (Cancel is the default; it states the counts and that they will not be shown again). Feedback and the audit trail are kept; every clear is audited (`results_cleared`).
   - ✅ **UI polish pass:** emoji replaced by a themed line-icon set (`icons.py`); shared components (`components.py`) give every page the same header, toolbar, spacing and type scale; tables show severity/status as badges with neutral rows; system status shown once (header chips for pipeline, ingestion, enrichment, kill switch, integrity, providers, drift); Settings rebuilt as cards with one switch style; unused `dashboard_components.py` removed.
 - **Test-suite stability:** The full suite used to die silently near 89% (exit 127 / `0xC0000409`). Cause: a `QTimer.singleShot` lambda in the report drawer fired after the drawer was destroyed; PyQt6 calls `qFatal()` for any unhandled exception in a Qt callback while the default `sys.excepthook` is installed. Fixed by an owned timer; the app now installs a logging excepthook (`soc_copilot.main.install_excepthook`), and `tests/conftest.py` records such exceptions and fails the test where they surface instead of aborting the run. No split-suite strategy is needed. Rule for new UI code: never schedule a lambda that touches a widget with `QTimer.singleShot` — use a timer parented to the widget or a bound method.
-- **CI:** GitHub Actions (`.github/workflows/tests.yml`) runs the full suite offscreen on Windows (Python 3.12) on every push to `main` and every pull request. No secrets are needed; the integration tests that need the local trained models skip themselves ("Models not trained"), so CI reports 906 passed, 15 skipped.
+- **CI:** GitHub Actions (`.github/workflows/tests.yml`) runs the full suite offscreen on Windows (Python 3.12) on every push to `main` and every pull request. No secrets are needed; the integration tests that need the local trained models skip themselves ("Models not trained"), so CI skips 8 more tests than a machine with models. GitHub's Windows runners run as Administrator: tests must not depend on whether the person running them is an admin (the permission chip test once did).
 - **Acceptance criteria:**
   - All UI colours resolve through theme tokens (no hex literals outside `theme.py`, enforced by a test); no emoji in UI code (enforced by a test).
   - `ThemeManager` can switch palettes at runtime via `set_theme()` and re-apply the global stylesheet.
@@ -371,7 +396,7 @@ Embed an animated, real-time pipeline graph in the dashboard so analysts can see
   - **Motion:** each event stays on screen at least 120 ms and a newer run drops an older backlog; node colours fade. With Reduce motion on (or the dashboard hidden) changes are instant.
   - **Verification:** headless screenshots in dark and light at 1500x950 and 1280x720; suite at 1001 passed, 7 skipped.
 
-##### Milestone 6b: Investigation Graph, Packet Animation, Replay
+##### Milestone 6b: Investigation Graph, Packet Animation, Replay — ✅ Done (12/10/2026)
 
 - **Goal:** Extend the graph to investigations and past runs.
 - **Dependencies:** Milestone 6a.
@@ -380,7 +405,14 @@ Embed an animated, real-time pipeline graph in the dashboard so analysts can see
   - Packet animation: a small `QGraphicsEllipseItem` travels along the edge between active nodes (off with Reduce motion).
   - Replay: each run records `(stage, status, timestamp, detail)`; a `QTimer` parented to the widget replays a past run without re-uploading logs.
 - **Risks:** `QGraphicsScene` performance degrades with many animated items; mitigate by limiting concurrent packet animations and pausing while the dashboard is hidden.
-- **Status:** Not started
+- **Status:** Done —
+  - **Reusable graph:** `PipelineGraphWidget` draws any `GraphSpec` (stages, edges, lanes, layout, optional collapsible group); the dashboard graph renders pixel-identically to 6a.
+  - **Investigation progress:** `MCPOrchestrator.investigate(target, on_stage=...)` reports Lookup (cache / internal address / enrichment off, with the reason), Recon, Reputation and Shodan (in parallel, each as it finishes) and Report: done / skipped / failed / timeout. `InvestigationWorker` wraps them in `StageEvent`s (one id per run); `ControllerBridge.investigationStageUpdated` relays them.
+  - **Report drawer:** an "Investigation steps" section (graph + one-line summary, collapsible, saved) replaces the spinner while running and stays above the report; the drawer's Recent list restores each run's final graph. New amber "Timed out" status. At the drawer's 320 px minimum the graph text is ~9 px.
+  - **Packets:** a dot travels along each edge into a running stage (max 4, staggered for parallel agents), on both graphs; paused while hidden; off with Reduce motion (re-checked every frame, since toggling it emits no signal).
+  - **Replay:** the Pipeline card records the last 20 runs in memory; the play button lists them ("21:40:43 · linux_auth.log · 1,240 logs · 3 alerts") and replays one step by step — also with Reduce motion on, without fades or packets. A live run takes over a replay.
+  - **Live system logs (option C):** batches carry their source (upload with file name / system logs). Uploads and system batches that raise alerts, fail or are blocked appear on the graph and in replay; routine system batches only update a quiet "System logs: live · 7 events at 00:49:22 · no alerts" line in the card header.
+  - **Verification:** headless screenshots in dark and light (drawer at 440 px and its 320 px minimum; dashboard at 1500x950 and 1280x720); a real investigation with the configured keys; suite at 1181 passed, 7 skipped.
 
 #### Milestone 7: Assistant ↔ LLM
 
@@ -411,7 +443,7 @@ Embed an animated, real-time pipeline graph in the dashboard so analysts can see
 |------|---------------|------------------------|------------------------|
 | **API Rate Limiting** | ReconAgent relies on free `ipwho.is` which heavily rate limits. | Agent returns `PARTIAL` errors constantly; analysts lose GeoIP context. | Strictly enforce the 6-hour `diskcache` in the Orchestrator. Provide config options to use paid GeoIP databases if necessary. |
 | **GUI Deadlocks** | Async API calls are bound to the PyQt6 interface via `QThreadPool`/`QRunnable` workers and `reportReady` signals. | If asyncio loops were run directly on the main UI thread, the application would freeze for up to 30 seconds during report generation. | Keep executing the orchestrator entirely off the main thread, communicating back strictly via `pyqtSignal`. |
-| **LLM Latency** | NVIDIA NIM / OpenRouter API calls in `ReportAgent` take significant time. The data agents (Recon/Reputation/Shodan) time out after 10s; `ReportAgent` has its own 30s timeout, which also bounds the LLM HTTP call (`mcp/orchestrator.py`). | Responses slower than 30s yield a `TIMEOUT` result, and the analyst sees nothing until the whole investigation finishes. | Keep the 30s `ReportAgent` timeout. Show per-agent progress (Milestone 6b investigation graph) so analysts know the system isn't hung. |
+| **LLM Latency** | Free-tier LLM calls take 15–77 s depending on the model. The data agents time out after 10 s; the report model chain has 30 s per model and 65 s in total (`mcp/report_agent.py`). | A slow or retired model yields a partial report without the AI summary. | Fast benchmarked default plus an NVIDIA fallback model; the drawer's investigation steps show progress (Milestone 6b). |
 
 ### 9. Final Recommendations
 
