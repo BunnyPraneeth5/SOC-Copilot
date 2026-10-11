@@ -121,7 +121,7 @@ class TestControllerStageEvents:
         result = controller.process_batch(_batch(3))
         done = {e.stage: e for e in events if e.status == "done"}
 
-        assert done["ingest"].data == {"records": 3}
+        assert done["ingest"].data == {"records": 3, "source": "upload", "source_label": ""}
         assert done["text_detect"].detail.startswith("rules:")
         assert done["flow_route"].data == {"routed": 0, "other": 3}
         store = done["store"].data

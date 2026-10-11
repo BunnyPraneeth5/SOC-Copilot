@@ -21,6 +21,10 @@ PIPELINE_STAGES = (
 )
 FLOW_ML_STAGES = ("preprocess", "features", "detect")
 
+# Where a batch came from (ingest stage event data["source"])
+SOURCE_UPLOAD = "upload"
+SOURCE_SYSTEM_LOGS = "system_logs"
+
 STAGE_ACTIVE = "active"
 STAGE_DONE = "done"
 STAGE_SKIPPED = "skipped"

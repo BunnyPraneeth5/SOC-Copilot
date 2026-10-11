@@ -423,7 +423,13 @@ def start_system_log_ingestion(controller, kill_switch, project_root: Path):
             config_path=config_path,
             killswitch_check=kill_switch.is_active,
         )
-        integration.initialize(controller.process_batch)
+        from soc_copilot.phase4.controller.schemas import SOURCE_SYSTEM_LOGS
+
+        def process_system_batch(records):
+            return controller.process_batch(records, source=SOURCE_SYSTEM_LOGS,
+                                            source_label="Windows event logs")
+
+        integration.initialize(process_system_batch)
         integration.start()
         
         print("  ▶ System log ingestion started — analyzing live Windows events")

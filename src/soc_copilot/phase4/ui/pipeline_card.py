@@ -16,6 +16,11 @@ Stage events are played back with a short minimum time per step so even
 millisecond batches are visible; a newer run replaces any backlog. With
 Reduce motion on (or the dashboard hidden) events apply instantly.
 
+Live system logs: ingestion sends a small batch every few seconds. Routine
+batches (no alerts, nothing failed) only update a quiet "System logs: live"
+line; batches that raise alerts or fail are shown and recorded like an
+upload, so the graph always shows something worth looking at.
+
 Replay (Milestone 6b): the card records the last ``MAX_RUNS`` runs in
 memory; the play button replays one step by step. A replay is something the
 analyst asked for, so it steps even with Reduce motion on (without fades or
@@ -60,6 +65,9 @@ STEP_MS = 120            # minimum time each stage event stays on screen
 MAX_QUEUE = 60
 MAX_RUNS = 20            # runs kept in memory for replay
 REPLAY_TAG = "#replay"
+SOURCE_SYSTEM_LOGS = "system_logs"  # = controller.schemas.SOURCE_SYSTEM_LOGS
+MAX_PENDING_BATCHES = 5  # system batches held until they finish
+LIVE_MAX_W = 300         # px for the live system-log line in the header
 ML_AUTO_COLLAPSE_WIDTH = 900
 GRAPH_MIN_H = 110
 GRAPH_MAX_H = 165
@@ -71,6 +79,13 @@ def _palette():
 
 def _truthy(value) -> bool:
     return str(value).lower() in ("true", "1", "yes", "on")
+
+
+def _source_name(source, label) -> str:
+    """Short name of where a run came from, for labels and the summary."""
+    if source == SOURCE_SYSTEM_LOGS:
+        return "system logs"
+    return label or ""
 
 
 class PipelineStrip(QWidget):
@@ -145,7 +160,9 @@ class PipelineCard(QFrame):
         self._timer.timeout.connect(self._play_next)
         self._last_store: dict | None = None
         self._last_time = None
-        self._runs: deque = deque(maxlen=MAX_RUNS)  # [{"id", "events"}]
+        self._runs: deque = deque(maxlen=MAX_RUNS)  # [{"id", "events", ...}]
+        self._origins: dict = {}        # batch_id -> (source, label)
+        self._pending_system: dict = {}  # batch_id -> events, until it ends
         self._replay_seq = 0
         self._replay_menu: QMenu | None = None
         self._auto_view = FULL
@@ -181,6 +198,15 @@ class PipelineCard(QFrame):
         set_role(self.summary_label, "pageSubtitle")
         self.summary_label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
         header.addWidget(self.summary_label, 1)
+        # quiet live line for routine system-log batches; in the header so
+        # the card is no taller (the full graph must still fit)
+        self.live_label = QLabel()
+        set_role(self.live_label, "pageSubtitle")
+        self.live_label.setStyleSheet("font-size: 11px;")
+        self.live_label.setMaximumWidth(LIVE_MAX_W)
+        self.live_label.setVisible(False)
+        self._live_text = ""
+        header.addWidget(self.live_label)
         self.replay_btn = icon_button("play", "Replay a recent run", "text_muted")
         self.replay_btn.clicked.connect(self._show_replay_menu)
         header.addWidget(self.replay_btn)
@@ -288,6 +314,14 @@ class PipelineCard(QFrame):
 
     def on_stage_event(self, event) -> None:
         """Slot for ``ControllerBridge.pipelineStageUpdated``."""
+        source, _ = self._origin(event)
+        if source == SOURCE_SYSTEM_LOGS:
+            self._on_system_event(event)
+            return
+        self._show_live(event)
+
+    def _show_live(self, event) -> None:
+        """A live run event for the graph (uploads, notable system batches)."""
         self._record(event)
         if self._queue and self.is_replay(self._queue[0].batch_id):
             # a live run takes over from a replay at once
@@ -329,9 +363,91 @@ class PipelineCard(QFrame):
     def is_replay(batch_id) -> bool:
         return REPLAY_TAG in str(batch_id or "")
 
+    def _origin(self, event) -> tuple:
+        """(source, label) of the event's batch; uploads by default."""
+        data = getattr(event, "data", None) or {}
+        if event.stage == "ingest" and "source" in data:
+            self._origins[event.batch_id] = (data["source"], data.get("source_label", ""))
+            while len(self._origins) > 4 * MAX_RUNS:
+                self._origins.pop(next(iter(self._origins)))
+        return self._origins.get(event.batch_id, ("upload", ""))
+
+    # -- live system logs ------------------------------------------------------
+
+    @staticmethod
+    def _batch_finished(event) -> bool:
+        return ((event.stage == "store" and event.status in (DONE, SKIPPED))
+                or (event.stage == "ingest" and event.status in (BLOCKED, SKIPPED)))
+
+    @staticmethod
+    def _batch_alerts(events) -> int:
+        for e in reversed(events):
+            data = getattr(e, "data", None) or {}
+            if e.stage in ("store", "alerts") and e.status == DONE and "alerts" in data:
+                return int(data["alerts"])
+        return 0
+
+    @classmethod
+    def is_notable(cls, events) -> bool:
+        """A system batch worth the graph: alerts, a failure or a block."""
+        return (cls._batch_alerts(events) > 0
+                or any(e.status in (FAILED, BLOCKED) for e in events))
+
+    def _on_system_event(self, event) -> None:
+        events = self._pending_system.setdefault(event.batch_id, [])
+        events.append(event)
+        while len(self._pending_system) > MAX_PENDING_BATCHES:  # never finished
+            self._pending_system.pop(next(iter(self._pending_system)))
+        if not self._batch_finished(event):
+            return
+        events = self._pending_system.pop(event.batch_id)
+        self._update_live_line(events)
+        if self.is_notable(events):
+            for e in events:
+                self._show_live(e)
+
+    def live_text(self, events) -> str:
+        stamp = getattr(events[-1], "timestamp", None)
+        when = f" at {stamp.strftime('%H:%M:%S')}" if stamp else ""
+        records = next((e.data.get("records") for e in events
+                        if e.stage == "ingest" and e.status == DONE and e.data), None)
+        if any(e.status == BLOCKED for e in events):
+            outcome = "blocked by kill switch"
+        elif any(e.status == FAILED for e in events):
+            outcome = "analysis failed"
+        else:
+            n = self._batch_alerts(events)
+            outcome = "no alerts" if n == 0 else f"{n} alert{'' if n == 1 else 's'}"
+        count = f"{records} event{'' if records == 1 else 's'}" if records is not None else "batch"
+        return f"System logs: live · {count}{when} · {outcome}"
+
+    def _update_live_line(self, events) -> None:
+        self._live_text = self.live_text(events)
+        self.live_label.setToolTip(
+            f"{self._live_text}\n\nLive Windows event ingestion. Batches "
+            "without alerts only update this line; batches with alerts or "
+            "failures appear on the graph."
+        )
+        self.live_label.setVisible(True)
+        self._elide_live()
+
+    @property
+    def live_status(self) -> str:
+        """Full live system-log line (the label may show it shortened)."""
+        return self._live_text
+
+    def _elide_live(self) -> None:
+        fm = self.live_label.fontMetrics()
+        self.live_label.setText(fm.elidedText(
+            self._live_text, Qt.TextElideMode.ElideRight, LIVE_MAX_W))
+
+    # -- recording -------------------------------------------------------------
+
     def _record(self, event) -> None:
         if not self._runs or self._runs[-1]["id"] != event.batch_id:
-            self._runs.append({"id": event.batch_id, "events": []})
+            source, label = self._origins.get(event.batch_id, ("upload", ""))
+            self._runs.append({"id": event.batch_id, "events": [],
+                               "source": source, "label": label})
         self._runs[-1]["events"].append(event)
 
     def recent_runs(self) -> list[dict]:
@@ -343,6 +459,9 @@ class PipelineCard(QFrame):
         events = run["events"]
         stamp = getattr(events[0], "timestamp", None) if events else None
         parts = [stamp.strftime("%H:%M:%S") if stamp else "Run"]
+        name = _source_name(run.get("source"), run.get("label"))
+        if name:
+            parts.append(name)
         final = {e.stage: e for e in events if e.status != ACTIVE}
         store = final.get("store")
         if any(e.status == BLOCKED for e in events):
@@ -422,6 +541,9 @@ class PipelineCard(QFrame):
         if store == DONE:
             data = self._last_store or {}
             parts = [f"Last run {when}"]
+            name = _source_name(*self._origins.get(self.graph.batch_id.split(REPLAY_TAG)[0], (None, None)))
+            if name:
+                parts.append(name)
             if "records" in data:
                 parts.append(f"{data['records']:,} logs")
             if "alerts" in data:

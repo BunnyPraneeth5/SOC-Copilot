@@ -10,7 +10,7 @@ from datetime import datetime
 import threading
 from PyQt6.QtCore import QObject, QRunnable, QThreadPool, QTimer, pyqtSignal
 from ..controller import AppController, AnalysisResult
-from ..controller.schemas import StageEvent
+from ..controller.schemas import SOURCE_UPLOAD, StageEvent
 from soc_copilot.mcp import AgentLookupError, MCPOrchestrator, ThreatReport
 from soc_copilot.security.input_validator import validate_log_file
 
@@ -406,7 +406,9 @@ class ControllerBridge(QObject):
             records = self._parse_file(path)
             if records:
                 with self._process_lock:
-                    self._controller.process_batch(records)
+                    self._controller.process_batch(
+                        records, source=SOURCE_UPLOAD, source_label=path.name
+                    )
                     self._sources_added += 1
                     self._controller.set_sources_count(self._sources_added)
             return True

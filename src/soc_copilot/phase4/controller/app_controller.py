@@ -11,6 +11,8 @@ from pathlib import Path
 
 from soc_copilot.pipeline import AnalysisStats, create_soc_copilot
 from .schemas import (
+    SOURCE_SYSTEM_LOGS,
+    SOURCE_UPLOAD,
     AnalysisResult,
     AlertSummary,
     PipelineStats,
@@ -166,19 +168,32 @@ class AppController:
             )
             self._flow_feature_names = None
     
-    def process_batch(self, records: List[dict]) -> Optional[AnalysisResult]:
-        """Process batch of raw log records (one batch at a time)."""
-        with self._batch_lock:
-            return self._process_batch(records)
+    def process_batch(
+        self,
+        records: List[dict],
+        source: str = SOURCE_UPLOAD,
+        source_label: str = "",
+    ) -> Optional[AnalysisResult]:
+        """Process batch of raw log records (one batch at a time).
 
-    def _process_batch(self, records: List[dict]) -> Optional[AnalysisResult]:
+        ``source`` (``SOURCE_UPLOAD`` / ``SOURCE_SYSTEM_LOGS``) and
+        ``source_label`` (e.g. the file name) travel on the ingest stage
+        event, so the UI can tell uploads from live system-log batches.
+        """
+        with self._batch_lock:
+            return self._process_batch(records, source, source_label)
+
+    def _process_batch(
+        self, records: List[dict], source: str, source_label: str
+    ) -> Optional[AnalysisResult]:
         batch_id = str(uuid.uuid4())
+        origin = {"source": source, "source_label": source_label}
 
         # Check kill switch
         if self.killswitch_check and self.killswitch_check():
             if records:
                 self._emit_stage(
-                    batch_id, "ingest", STAGE_BLOCKED, "Kill switch active"
+                    batch_id, "ingest", STAGE_BLOCKED, "Kill switch active", origin
                 )
             return None
 
@@ -186,11 +201,11 @@ class AppController:
             raise RuntimeError("Pipeline not initialized. Call initialize() first.")
 
         # Extract raw lines
-        with self._stage(batch_id, "ingest") as st:
+        with self._stage(batch_id, "ingest", origin) as st:
             line_records = [r for r in records if r.get("raw_line")]
             raw_lines = [r["raw_line"] for r in line_records]
             st["detail"] = f"{len(raw_lines)} log lines"
-            st["data"] = {"records": len(raw_lines)}
+            st["data"] = {"records": len(raw_lines), **origin}
             if not raw_lines:
                 st["status"] = STAGE_SKIPPED
         if not raw_lines:
@@ -393,12 +408,12 @@ class AppController:
                 logger.warning(f"Stage listener failed: {e}")
 
     @contextmanager
-    def _stage(self, batch_id: str, stage: str):
+    def _stage(self, batch_id: str, stage: str, active_data: Optional[dict] = None):
         """Emit ``active`` on entry and ``done`` (or the status set in the
         yielded dict) on exit; an exception emits ``failed`` and re-raises.
         """
         info = {"status": STAGE_DONE, "detail": "", "data": {}}
-        self._emit_stage(batch_id, stage, STAGE_ACTIVE)
+        self._emit_stage(batch_id, stage, STAGE_ACTIVE, "", active_data)
         try:
             yield info
         except Exception as e:
