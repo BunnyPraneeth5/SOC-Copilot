@@ -99,11 +99,16 @@ def main():
         # Check optional permissions (non-blocking)
         optional_perms = check_optional_permissions(project_root)
         
-        # If running as admin, start system log exporters
+        # If running as admin and enabled in config, start system log
+        # exporters (nothing reads their output when ingestion is off)
+        system_logs_on = system_log_ingestion_enabled(project_root)
         if optional_perms.get("has_system_log_access"):
-            exporter_processes = start_system_log_exporters(project_root)
-            if exporter_processes:
-                print(f"Started {len(exporter_processes)} system log exporter(s).")
+            if system_logs_on:
+                exporter_processes = start_system_log_exporters(project_root)
+                if exporter_processes:
+                    print(f"Started {len(exporter_processes)} system log exporter(s).")
+            else:
+                print("System log ingestion disabled in config: exporters not started.")
         
         # Import PyQt6 with helpful error message
         try:
@@ -212,9 +217,12 @@ def main():
         # Start system log ingestion if running as admin
         system_log_integration = None
         if optional_perms.get("has_system_log_access"):
-            system_log_integration = start_system_log_ingestion(
-                controller, kill_switch, project_root
-            )
+            if system_logs_on:
+                system_log_integration = start_system_log_ingestion(
+                    controller, kill_switch, project_root
+                )
+            else:
+                print("  System log ingestion: off (config/ingestion/system_logs.yaml)")
         
         # Create and configure QApplication. Unhandled callback errors are
         # logged instead of letting PyQt abort the process.
@@ -380,6 +388,20 @@ def start_system_log_exporters(project_root: Path) -> list:
             print(f"  ✗ Failed to start {name} exporter: {e}")
     
     return processes
+
+
+def system_log_ingestion_enabled(project_root: Path) -> bool:
+    """Whether config/ingestion/system_logs.yaml enables system log ingestion.
+
+    Uses the same config reader as SystemLogIntegration; a missing or
+    unreadable file means disabled.
+    """
+    try:
+        from soc_copilot.phase4.ingestion.system_logs import SystemLogConfig
+        config_path = project_root / "config" / "ingestion" / "system_logs.yaml"
+        return bool(SystemLogConfig(str(config_path)).enabled)
+    except Exception:
+        return False
 
 
 def start_system_log_ingestion(controller, kill_switch, project_root: Path):
