@@ -15,15 +15,23 @@ toggles it.
 Stage events are played back with a short minimum time per step so even
 millisecond batches are visible; a newer run replaces any backlog. With
 Reduce motion on (or the dashboard hidden) events apply instantly.
+
+Replay (Milestone 6b): the card records the last ``MAX_RUNS`` runs in
+memory; the play button replays one step by step. A replay is something the
+analyst asked for, so it steps even with Reduce motion on (without fades or
+packets). A live run arriving mid-replay takes over at once.
 """
 
 from __future__ import annotations
 
 from collections import deque
+from dataclasses import replace
 
 from PyQt6.QtCore import QRectF, QSettings, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen
-from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import (
+    QFrame, QHBoxLayout, QLabel, QMenu, QSizePolicy, QVBoxLayout, QWidget,
+)
 
 from .components import icon_button
 from .icons import icon_label, set_icon
@@ -50,6 +58,8 @@ KEY_ML_COLLAPSED = "dashboard/pipeline_ml_collapsed"  # unset = automatic
 
 STEP_MS = 120            # minimum time each stage event stays on screen
 MAX_QUEUE = 60
+MAX_RUNS = 20            # runs kept in memory for replay
+REPLAY_TAG = "#replay"
 ML_AUTO_COLLAPSE_WIDTH = 900
 GRAPH_MIN_H = 110
 GRAPH_MAX_H = 165
@@ -135,6 +145,9 @@ class PipelineCard(QFrame):
         self._timer.timeout.connect(self._play_next)
         self._last_store: dict | None = None
         self._last_time = None
+        self._runs: deque = deque(maxlen=MAX_RUNS)  # [{"id", "events"}]
+        self._replay_seq = 0
+        self._replay_menu: QMenu | None = None
         self._auto_view = FULL
         self._applying_auto_ml = False
 
@@ -168,6 +181,9 @@ class PipelineCard(QFrame):
         set_role(self.summary_label, "pageSubtitle")
         self.summary_label.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
         header.addWidget(self.summary_label, 1)
+        self.replay_btn = icon_button("play", "Replay a recent run", "text_muted")
+        self.replay_btn.clicked.connect(self._show_replay_menu)
+        header.addWidget(self.replay_btn)
         self.toggle_btn = icon_button("chevron-up", "Show compact view", "text_muted")
         self.toggle_btn.clicked.connect(self._on_toggle_clicked)
         header.addWidget(self.toggle_btn)
@@ -272,6 +288,11 @@ class PipelineCard(QFrame):
 
     def on_stage_event(self, event) -> None:
         """Slot for ``ControllerBridge.pipelineStageUpdated``."""
+        self._record(event)
+        if self._queue and self.is_replay(self._queue[0].batch_id):
+            # a live run takes over from a replay at once
+            self._timer.stop()
+            self._queue.clear()
         if not motion_enabled(self):
             self._flush()
             self._apply(event, animate=False)
@@ -290,7 +311,8 @@ class PipelineCard(QFrame):
         if not self._queue:
             self._timer.stop()
             return
-        self._apply(self._queue.popleft(), animate=True)
+        # fades/packets only with motion; a replay still steps without them
+        self._apply(self._queue.popleft(), animate=motion_enabled(self))
 
     def _flush(self) -> None:
         self._timer.stop()
@@ -300,6 +322,74 @@ class PipelineCard(QFrame):
     @property
     def pending_events(self) -> int:
         return len(self._queue)
+
+    # -- recording and replay -----------------------------------------------------
+
+    @staticmethod
+    def is_replay(batch_id) -> bool:
+        return REPLAY_TAG in str(batch_id or "")
+
+    def _record(self, event) -> None:
+        if not self._runs or self._runs[-1]["id"] != event.batch_id:
+            self._runs.append({"id": event.batch_id, "events": []})
+        self._runs[-1]["events"].append(event)
+
+    def recent_runs(self) -> list[dict]:
+        """Recorded runs, newest first."""
+        return list(reversed(self._runs))
+
+    @staticmethod
+    def run_label(run: dict) -> str:
+        events = run["events"]
+        stamp = getattr(events[0], "timestamp", None) if events else None
+        parts = [stamp.strftime("%H:%M:%S") if stamp else "Run"]
+        final = {e.stage: e for e in events if e.status != ACTIVE}
+        store = final.get("store")
+        if any(e.status == BLOCKED for e in events):
+            parts.append("blocked by kill switch")
+        elif store is not None and store.status == DONE:
+            data = store.data or {}
+            if "records" in data:
+                parts.append(f"{data['records']:,} logs")
+            if "alerts" in data:
+                n = data["alerts"]
+                parts.append(f"{n} alert{'' if n == 1 else 's'}")
+        elif store is not None and store.status == SKIPPED:
+            parts.append("batch dropped")
+        else:
+            parts.append("incomplete")
+        return " · ".join(parts)
+
+    def replay(self, index: int = 0) -> bool:
+        """Replay recorded run ``index`` (0 = newest) step by step."""
+        runs = self.recent_runs()
+        if not 0 <= index < len(runs) or not runs[index]["events"]:
+            return False
+        self._replay_seq += 1
+        replay_id = f"{runs[index]['id']}{REPLAY_TAG}{self._replay_seq}"
+        self._timer.stop()
+        self._queue.clear()
+        self._queue.extend(replace(e, batch_id=replay_id) for e in runs[index]["events"])
+        self._play_next()
+        self._timer.start()
+        return True
+
+    def build_replay_menu(self) -> QMenu:
+        menu = QMenu(self)
+        runs = self.recent_runs()
+        if not runs:
+            empty = menu.addAction("No runs yet: upload logs first")
+            empty.setEnabled(False)
+        for i, run in enumerate(runs):
+            action = menu.addAction(("Replay last run · " if i == 0 else "") + self.run_label(run))
+            action.triggered.connect(lambda _checked=False, i=i: self.replay(i))
+        return menu
+
+    def _show_replay_menu(self) -> None:
+        if self._replay_menu is not None:
+            self._replay_menu.deleteLater()
+        self._replay_menu = self.build_replay_menu()
+        self._replay_menu.popup(self.replay_btn.mapToGlobal(self.replay_btn.rect().bottomLeft()))
 
     def _apply(self, event, animate: bool) -> None:
         if event.batch_id != self.graph.batch_id:
@@ -314,6 +404,10 @@ class PipelineCard(QFrame):
     # -- summary line -------------------------------------------------------------
 
     def summary_text(self) -> str:
+        text = self._summary_body()
+        return f"Replay · {text}" if self.is_replay(self.graph.batch_id) else text
+
+    def _summary_body(self) -> str:
         if self.graph.batch_id is None:
             return "Waiting for logs"
         statuses = {spec.key: self.graph.status(spec.key) for spec in STAGES}

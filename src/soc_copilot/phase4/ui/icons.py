@@ -73,6 +73,7 @@ ICONS = {
     "info": '<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/>'
             '<line x1="12" y1="8" x2="12.01" y2="8"/>',
     "message-square": '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+    "play": '<polygon points="5 3 19 12 5 21 5 3"/>',
     "pause-circle": '<circle cx="12" cy="12" r="10"/><line x1="10" y1="15" x2="10" y2="9"/>'
                     '<line x1="14" y1="15" x2="14" y2="9"/>',
     "refresh": '<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>'
