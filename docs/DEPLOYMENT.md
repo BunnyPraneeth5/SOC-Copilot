@@ -158,10 +158,17 @@ Key variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SOC_COPILOT_MODELS_DIR` | `data/models` | Trained model directory |
-| `SOC_COPILOT_LOG_LEVEL` | `INFO` | Logging verbosity |
-| `SOC_COPILOT_SYSTEM_LOGS_ENABLED` | `true` | Enable system log ingestion |
-| `SOC_COPILOT_EXPORT_INTERVAL` | `5` | System log export interval (seconds) |
+| `SOC_COPILOT_ENABLE_ONLINE_ENRICHMENT` | `false` | Allow external lookups (Recon, Reputation, Shodan, report LLM) |
+| `SOC_COPILOT_STRICT_MODEL_INTEGRITY` | `true` | Refuse to load models missing from the hash manifest |
+| `ABUSEIPDB_API_KEY`, `VIRUSTOTAL_API_KEY`, `SHODAN_API_KEY` | — | Threat-intelligence enrichment keys |
+| `REPORT_LLM_PROVIDER` | `nvidia_nim` | Report LLM provider (`nvidia_nim` or `openrouter`) |
+| `NVIDIA_API_KEY` | — | Key from build.nvidia.com (`nvapi-…`) |
+| `NVIDIA_NIM_MODEL` | `nvidia/nemotron-3-super-120b-a12b` | Primary report model |
+| `NVIDIA_NIM_FALLBACK_MODEL` | `deepseek-ai/deepseek-v4.1-flash` | Tried when the primary fails or times out; empty disables it |
+| `REPORT_LLM_FALLBACK_PROVIDER` | unset | Optional last-resort provider (sends alert data there too) |
+| `SOC_COPILOT_THEME` | `dark` | Initial UI theme (`dark` or `light`) |
+
+System log ingestion is configured in `config/ingestion/system_logs.yaml` (`enabled`, `export_interval`), not in `.env`.
 
 ### YAML Configuration
 
