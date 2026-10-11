@@ -95,7 +95,11 @@ class ResultStore:
 
     def __init__(self, max_results: int = 1000, db_path=None):
         self.max_results = max_results
-        self._results = deque(maxlen=max_results)
+        # No maxlen: eviction is explicit (see _evict), so results with
+        # alerts outlive alert-free ones. Live system-log ingestion stores a
+        # small batch every few seconds; with plain oldest-first eviction
+        # uploaded files' alerts (and their triage) were gone in ~80 min.
+        self._results = deque()
         self._triage = {}  # alert_id -> {status, updated_at, updated_by, note}
         self._lock = Lock()
         self._db_path = Path(db_path) if db_path is not None else None
@@ -224,17 +228,7 @@ class ResultStore:
                         _serialize_result(result),
                     ),
                 )
-                conn.execute(
-                    """
-                    DELETE FROM analysis_results
-                    WHERE batch_id NOT IN (
-                        SELECT batch_id FROM analysis_results
-                        ORDER BY created_at DESC, batch_id DESC
-                        LIMIT ?
-                    )
-                    """,
-                    (self.max_results,),
-                )
+                self._prune_db(conn)
                 # Triage rows follow result retention: keep only triage for
                 # alert_ids still present in remaining payloads. Inner try —
                 # a JSON1 failure must not roll back the result insert.
@@ -254,6 +248,52 @@ class ResultStore:
                     logger.warning("triage_prune_failed", error=str(exc))
         except (sqlite3.Error, OSError) as exc:
             logger.warning("result_store_db_add_failed", error=str(exc))
+
+    def _prune_db(self, conn: sqlite3.Connection) -> None:
+        """Keep max_results rows: oldest alert-free rows go first."""
+        (count,) = conn.execute("SELECT COUNT(*) FROM analysis_results").fetchone()
+        excess = count - self.max_results
+        if excess <= 0:
+            return
+        try:
+            deleted = conn.execute(
+                """
+                DELETE FROM analysis_results WHERE batch_id IN (
+                    SELECT batch_id FROM analysis_results
+                    WHERE json_array_length(payload, '$.alerts') = 0
+                    ORDER BY created_at ASC, batch_id ASC
+                    LIMIT ?
+                )
+                """,
+                (excess,),
+            ).rowcount
+            excess -= max(deleted, 0)
+        except sqlite3.Error as exc:  # no JSON1: fall back to oldest first
+            logger.warning("result_store_alert_aware_prune_failed", error=str(exc))
+        if excess > 0:
+            conn.execute(
+                """
+                DELETE FROM analysis_results WHERE batch_id IN (
+                    SELECT batch_id FROM analysis_results
+                    ORDER BY created_at ASC, batch_id ASC
+                    LIMIT ?
+                )
+                """,
+                (excess,),
+            )
+
+    def _evict(self) -> None:
+        """Trim memory to max_results: oldest alert-free results first."""
+        excess = len(self._results) - self.max_results
+        if excess <= 0:
+            return
+        drop = [r for r in self._results if not r.alerts][:excess]
+        if len(drop) < excess:  # everything left has alerts: oldest go
+            dropping = set(map(id, drop))
+            with_alerts = [r for r in self._results if id(r) not in dropping]
+            drop += with_alerts[: excess - len(drop)]
+        dropped = set(map(id, drop))
+        self._results = deque(r for r in self._results if id(r) not in dropped)
 
     def _persist_clear(self):
         try:
@@ -315,8 +355,8 @@ class ResultStore:
         """Add analysis result"""
         with self._lock:
             self._results.append(result)
-            # Evicted results drop their triage rows too (deque maxlen
-            # silently drops the oldest entries).
+            self._evict()
+            # Evicted results drop their triage rows too
             known = self._known_alert_ids()
             for alert_id in list(self._triage):
                 if alert_id not in known:
