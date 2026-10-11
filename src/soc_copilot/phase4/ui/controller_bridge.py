@@ -1,6 +1,8 @@
 """Read-only bridge between UI and AppController"""
 
 import asyncio
+import inspect
+import uuid
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Any, Callable
 from pathlib import Path
@@ -8,6 +10,7 @@ from datetime import datetime
 import threading
 from PyQt6.QtCore import QObject, QRunnable, QThreadPool, QTimer, pyqtSignal
 from ..controller import AppController, AnalysisResult
+from ..controller.schemas import StageEvent
 from soc_copilot.mcp import AgentLookupError, MCPOrchestrator, ThreatReport
 from soc_copilot.security.input_validator import validate_log_file
 
@@ -24,6 +27,14 @@ class InvestigationSignals(QObject):
     """Per-task signal carrier owned outside the QRunnable."""
 
     reportReady = pyqtSignal(str, object, object)  # target, ThreatReport | None, InvestigationError | None
+    stageUpdated = pyqtSignal(str, object)  # target, StageEvent (Milestone 6b)
+
+
+def _accepts_on_stage(investigate) -> bool:
+    try:
+        return "on_stage" in inspect.signature(investigate).parameters
+    except (TypeError, ValueError):
+        return False
 
 
 class InvestigationWorker(QRunnable):
@@ -39,6 +50,17 @@ class InvestigationWorker(QRunnable):
         self.target = target
         self.signals = signals
         self._orchestrator_factory = orchestrator_factory
+        # one id per run, so the investigation graph starts fresh each time
+        self.investigation_id = f"inv-{uuid.uuid4().hex[:12]}"
+
+    def _on_stage(self, stage: str, status: str, detail: str = "") -> None:
+        """Orchestrator progress (worker thread) -> queued Qt signal."""
+        self.signals.stageUpdated.emit(self.target, StageEvent(
+            batch_id=self.investigation_id,
+            stage=stage,
+            status=status,
+            detail=detail,
+        ))
 
     def run(self) -> None:
         report: ThreatReport | None = None
@@ -46,7 +68,11 @@ class InvestigationWorker(QRunnable):
 
         try:
             orchestrator = self._orchestrator_factory()
-            report = asyncio.run(orchestrator.investigate(self.target))
+            if _accepts_on_stage(orchestrator.investigate):
+                coro = orchestrator.investigate(self.target, on_stage=self._on_stage)
+            else:
+                coro = orchestrator.investigate(self.target)
+            report = asyncio.run(coro)
         except AgentLookupError as exc:
             error = InvestigationError(str(exc), type(exc).__name__)
         except Exception as exc:
@@ -83,6 +109,7 @@ class ControllerBridge(QObject):
 
     reportReady = pyqtSignal(str, object, object)  # target, ThreatReport | None, InvestigationError | None
     providersChecked = pyqtSignal(object)  # list[ProviderStatus] | None
+    investigationStageUpdated = pyqtSignal(str, object)  # target, StageEvent (6b)
     resultsUpdated = pyqtSignal()  # results store changed (debounced)
     _resultArrived = pyqtSignal()  # internal: raw listener callback relay
     pipelineStageUpdated = pyqtSignal(object)  # StageEvent (Milestone 6a)
@@ -147,6 +174,7 @@ class ControllerBridge(QObject):
 
         signals = InvestigationSignals()
         worker = InvestigationWorker(normalized, signals)
+        signals.stageUpdated.connect(self.investigationStageUpdated)
         signals.reportReady.connect(self._on_investigation_ready)
 
         self._in_flight_targets.add(normalized)
