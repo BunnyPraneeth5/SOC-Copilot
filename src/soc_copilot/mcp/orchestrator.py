@@ -13,6 +13,7 @@ UNKNOWN-severity report is built from whatever data was collected.
 from __future__ import annotations
 
 import asyncio
+from typing import Callable, Optional
 
 from soc_copilot.mcp.cache import MCPCache
 from soc_copilot.mcp.exceptions import AgentLookupError
@@ -34,6 +35,39 @@ from soc_copilot.mcp.recon_agent import ReconAgent
 from soc_copilot.mcp.reputation_agent import ReputationAgent
 from soc_copilot.mcp.shodan_agent import ShodanAgent
 from soc_copilot.mcp.report_agent import ReportAgent
+
+# Investigation progress (Milestone 6b): on_stage(stage, status, detail).
+# Stages in order; recon, reputation and shodan run in parallel.
+INVESTIGATION_STAGES = ("lookup", "recon", "reputation", "shodan", "report")
+DATA_AGENT_STAGES = ("recon", "reputation", "shodan")
+StageCallback = Callable[[str, str, str], None]
+
+_AGENT_STATUS = {
+    AgentStatus.SUCCESS: "done",
+    AgentStatus.PARTIAL: "done",
+    AgentStatus.FAILED: "failed",
+    AgentStatus.TIMEOUT: "timeout",
+}
+
+
+def _report_stage(
+    on_stage: Optional[StageCallback], stage: str, status: str, detail: str = ""
+) -> None:
+    """Call the progress hook; a failing hook never breaks an investigation."""
+    if on_stage is None:
+        return
+    try:
+        on_stage(stage, status, detail)
+    except Exception:  # noqa: BLE001 - reporting only
+        pass
+
+
+def _agent_detail(result: AgentResult) -> str:
+    if result.status == AgentStatus.PARTIAL:
+        return f"Partial data: {result.error}" if result.error else "Partial data"
+    if result.status == AgentStatus.SUCCESS:
+        return ""
+    return result.error or result.status.value
 
 
 class MCPOrchestrator:
@@ -69,6 +103,7 @@ class MCPOrchestrator:
         self,
         target: str,
         statuses: list[ProviderStatus],
+        on_stage: Optional[StageCallback] = None,
     ) -> tuple[
         AgentResult,
         AgentResult,
@@ -103,20 +138,33 @@ class MCPOrchestrator:
             _skip_error(("shodan",)),
         )
 
-        async def _run_or_skip(agent, agent_name, run, skip_error) -> AgentResult:
-            if run:
-                return await agent.safe_execute(target)
-            return AgentResult(
-                agent_name=agent_name,
-                status=AgentStatus.FAILED,
-                error=skip_error or "Skipped: provider not usable",
+        async def _run_or_skip(agent, agent_name, stage, run, skip_error) -> AgentResult:
+            if not run:
+                error = skip_error or "Skipped: provider not usable"
+                _report_stage(on_stage, stage, "skipped", error)
+                return AgentResult(
+                    agent_name=agent_name,
+                    status=AgentStatus.FAILED,
+                    error=error,
+                )
+            _report_stage(on_stage, stage, "active")
+            try:
+                result = await agent.safe_execute(target)
+            except Exception as exc:
+                _report_stage(on_stage, stage, "failed", str(exc))
+                raise
+            _report_stage(
+                on_stage, stage,
+                _AGENT_STATUS.get(result.status, "failed"), _agent_detail(result),
             )
+            return result
 
         results = await asyncio.gather(
             *(
-                _run_or_skip(agent, name, run, skip_error)
-                for agent, name, run, skip_error in zip(
-                    agents, agent_names, run_flags, skip_errors, strict=True
+                _run_or_skip(agent, name, stage, run, skip_error)
+                for agent, name, stage, run, skip_error in zip(
+                    agents, agent_names, DATA_AGENT_STAGES, run_flags,
+                    skip_errors, strict=True
                 )
             ),
             return_exceptions=True,
@@ -253,8 +301,14 @@ class MCPOrchestrator:
             llm_model=None,
         )
 
-    async def investigate(self, target: str) -> ThreatReport:
+    async def investigate(
+        self, target: str, on_stage: Optional[StageCallback] = None
+    ) -> ThreatReport:
         """Run the full investigation pipeline for a target.
+
+        ``on_stage(stage, status, detail)`` (optional) is told about each of
+        ``INVESTIGATION_STAGES``: active, then done / skipped / failed /
+        timeout. Data agents report as each one finishes.
 
         Steps:
             1. Check diskcache for ``"target:<normalized>"``; return early on hit.
@@ -276,17 +330,28 @@ class MCPOrchestrator:
         """
         # diskcache is synchronous. For this desktop app milestone the cache
         # access is small enough to perform directly on the event loop.
+        def finish_early(detail: str) -> None:
+            _report_stage(on_stage, "lookup", "done", detail)
+            for stage in INVESTIGATION_STAGES[1:]:
+                _report_stage(on_stage, stage, "skipped", detail)
+
+        _report_stage(on_stage, "lookup", "active")
         cached_report = self._cache.get_report(target)
         if cached_report is not None:
+            finish_early("Cached report (less than 6 h old)")
             return cached_report
 
         if is_internal_ip(target):
             report = self._build_internal_target_report(target)
             self._cache.set_report(target, report)
+            finish_early("Internal address: local report, no lookups")
             return report
 
         if not online_enrichment_enabled():
+            finish_early("Online enrichment off: local-only report")
             return self._build_local_only_report(target)
+
+        _report_stage(on_stage, "lookup", "done", "External target: enrichment on")
 
         # Local provider statuses (no probing) drive agent dispatch.
         statuses = get_provider_statuses()
@@ -296,21 +361,34 @@ class MCPOrchestrator:
         # duplicate investigations in this milestone instead of sharing one
         # in-flight task. Add per-target dedupe only if upstream API load
         # becomes a real product issue.
-        recon, reputation, shodan = await self._run_data_agents(target, statuses)
+        recon, reputation, shodan = await self._run_data_agents(
+            target, statuses, on_stage
+        )
 
         if "report_llm" in usable:
             report_agent = self._build_report_agent(recon, reputation, shodan)
-            report_result = await report_agent.safe_execute(target)
+            _report_stage(on_stage, "report", "active")
+            try:
+                report_result = await report_agent.safe_execute(target)
+            except Exception as exc:
+                _report_stage(on_stage, "report", "failed", str(exc))
+                raise
 
             if (
                 report_result.status == AgentStatus.SUCCESS
                 and isinstance(report_result.data, ThreatReport)
             ):
                 self._cache.set_report(target, report_result.data)
+                _report_stage(on_stage, "report", "done")
                 return report_result.data
 
             report_error = (
                 report_result.error or "ReportAgent did not produce a ThreatReport"
+            )
+            _report_stage(
+                on_stage, "report",
+                "timeout" if report_result.status == AgentStatus.TIMEOUT else "failed",
+                report_error,
             )
         else:
             llm_status = next(
@@ -322,6 +400,7 @@ class MCPOrchestrator:
                 if llm_status is not None
                 else "Skipped: report LLM provider not usable"
             )
+            _report_stage(on_stage, "report", "skipped", report_error)
 
         data_types = (ReconResult, ReputationResult, ShodanResult)
         if any(
