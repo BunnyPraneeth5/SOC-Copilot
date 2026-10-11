@@ -13,7 +13,6 @@ from PyQt6.QtWidgets import QApplication
 
 from soc_copilot.mcp.models import ThreatReport, ThreatSeverity
 from soc_copilot.phase4.controller.schemas import StageEvent
-from soc_copilot.phase4.ui import controller_bridge as bridge_mod
 from soc_copilot.phase4.ui.controller_bridge import (
     ControllerBridge,
     InvestigationSignals,
@@ -80,14 +79,8 @@ class TestWorker:
 
 
 class TestBridgeRelay:
-    def test_events_reach_ui_thread_before_report(self, qapp, monkeypatch):
-        monkeypatch.setattr(bridge_mod, "MCPOrchestrator", FakeOrchestrator)
-        # InvestigationWorker's default factory was bound at import time
-        monkeypatch.setattr(
-            InvestigationWorker.__init__, "__defaults__", (FakeOrchestrator,)
-        )
-        controller = Mock(spec=object)
-        bridge = ControllerBridge(controller)
+    def test_events_reach_ui_thread_before_report(self, qapp):
+        bridge = ControllerBridge(Mock(spec=object), orchestrator_factory=FakeOrchestrator)
         order, threads = [], set()
 
         def on_stage(target, event):

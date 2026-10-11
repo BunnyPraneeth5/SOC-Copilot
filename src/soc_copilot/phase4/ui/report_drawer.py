@@ -21,6 +21,7 @@ from .report_format import report_mode, report_to_markdown
 from .theme import FONT_MD, ThemeManager, severity_color
 from .motion import show_toast, slide_open_width
 from .icons import icon_label, set_icon
+from .investigation_graph import InvestigationGraphPanel
 
 
 def _palette():
@@ -100,6 +101,12 @@ class ReportDrawer(QFrame):
         self._history_row = hist_wrap
         hist_wrap.setVisible(False)
         layout.addWidget(hist_wrap)
+
+        # Investigation steps graph (Milestone 6b): hidden until the first
+        # investigation; stays above the report afterwards
+        self.steps_panel = InvestigationGraphPanel()
+        self.steps_panel.setVisible(False)
+        layout.addWidget(self.steps_panel)
 
         # Stacked content pages
         self.stack = QStackedWidget()
@@ -214,20 +221,41 @@ class ReportDrawer(QFrame):
 
     # ------------------------------------------------------------- states
 
+    @staticmethod
+    def _norm(target) -> str:
+        return (target or "").strip().lower()
+
     def show_loading(self, target: str):
         self._current_target = target
         p = _palette()
         self._loading_label.setText(f"Investigating {target}…")
         self._loading_label.setStyleSheet(f"color: {p.text_muted};")
+        # the steps graph shows progress once events arrive; until then
+        # (or with an orchestrator that reports none) the bar does
+        self._loading_bar.setVisible(True)
+        self.steps_panel.start()
+        self.steps_panel.setVisible(True)
         self.stack.setCurrentIndex(0)
         self._footer.setVisible(False)
         self._reveal()
 
+    def on_investigation_stage(self, target: str, event) -> None:
+        """Slot for ``ControllerBridge.investigationStageUpdated``."""
+        if self._norm(target) != self._norm(self._current_target):
+            return  # another target's investigation; not shown
+        self.steps_panel.apply_event(event)
+        self.steps_panel.setVisible(True)
+        self._loading_bar.setVisible(False)
+
     def show_report(self, report):
+        run_target = self._current_target
         self._current_report = report
         self._current_target = getattr(report, "target", "") or ""
+        same_run = self._norm(run_target) == self._norm(self._current_target)
+        events = self.steps_panel.events if same_run else []
         self._render_report(report)
-        self._push_history(report)
+        self._push_history(report, events)
+        self.steps_panel.setVisible(bool(events))
         self.stack.setCurrentIndex(1)
         self._footer.setVisible(True)
         self._reveal()
@@ -425,22 +453,26 @@ class ReportDrawer(QFrame):
 
     # ------------------------------------------------------------- history
 
-    def _push_history(self, report):
+    def _push_history(self, report, events=None):
         target = getattr(report, "target", "") or "?"
         generated = getattr(report, "generated_at", None)
         stamp = generated.strftime("%H:%M") if isinstance(generated, datetime) else ""
         label = f"{target} — {stamp}" if stamp else target
-        self._history.insert(0, (label, report))
+        # (label, report, investigation step events of that run)
+        self._history.insert(0, (label, report, list(events or [])))
         del self._history[_MAX_HISTORY:]
         self.history_combo.blockSignals(True)
         self.history_combo.clear()
-        self.history_combo.addItems([label for label, _ in self._history])
+        self.history_combo.addItems([entry[0] for entry in self._history])
         self.history_combo.blockSignals(False)
         self._history_row.setVisible(True)
 
     def _on_history_select(self, index: int):
         if 0 <= index < len(self._history):
-            report = self._history[index][1]
+            _, report, events = self._history[index]
+            if events:
+                self.steps_panel.show_events(events)
+            self.steps_panel.setVisible(bool(events))
             self._current_report = report
             self._current_target = getattr(report, "target", "") or ""
             self._render_report(report)

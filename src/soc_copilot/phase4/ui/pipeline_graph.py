@@ -57,8 +57,8 @@ from soc_copilot.phase4.ui.theme import FONT_FAMILY, ThemeManager
 ML_STAGES = ("preprocess", "features", "detect")
 ML_GROUP = "ml"
 
-IDLE, ACTIVE, DONE, SKIPPED, FAILED, BLOCKED = (
-    "idle", "active", "done", "skipped", "failed", "blocked",
+IDLE, ACTIVE, DONE, SKIPPED, FAILED, BLOCKED, TIMEOUT = (
+    "idle", "active", "done", "skipped", "failed", "blocked", "timeout",
 )
 
 STATUS_TEXT = {
@@ -68,6 +68,7 @@ STATUS_TEXT = {
     SKIPPED: "Skipped",
     FAILED: "Failed",
     BLOCKED: "Blocked",
+    TIMEOUT: "Timed out",
 }
 
 # status -> palette token for border, status text and tinted fill
@@ -78,6 +79,7 @@ STATUS_TOKEN = {
     SKIPPED: "text_muted",
     FAILED: "danger",
     BLOCKED: "warning",
+    TIMEOUT: "warning",
 }
 
 
@@ -166,6 +168,8 @@ class GraphSpec:
     lanes: dict                     # lane -> y
     layout: dict                    # stage key -> (column, lane)
     group: GroupSpec | None = None
+    node_width: int = NODE_W
+    col_step: int = COL_STEP
 
     @property
     def labels(self) -> dict:
@@ -232,7 +236,7 @@ def aggregate_status(statuses: list[str]) -> str:
     with nothing running is between stages, so it still counts as running.
     """
     s = set(statuses)
-    for status in (FAILED, BLOCKED, ACTIVE):
+    for status in (FAILED, TIMEOUT, BLOCKED, ACTIVE):
         if status in s:
             return status
     if s == {SKIPPED}:
@@ -347,10 +351,11 @@ class NodeItem(QGraphicsObject):
         painter.drawPixmap(QRectF(10, 15, 16, 16), px, QRectF(px.rect()))
 
         text_x = 34
+        right = 18 if self._on_click is not None else 6  # room for chevron
         painter.setPen(_token("text_muted" if self.status == SKIPPED else "text"))
         painter.setFont(_font(12, QFont.Weight.DemiBold))
         painter.drawText(
-            QRectF(text_x, 6, w - text_x - 18, 18),
+            QRectF(text_x, 6, w - text_x - right, 18),
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
             self.spec.label,
         )
@@ -466,7 +471,7 @@ class EdgeItem(QGraphicsItem):
             return "text_muted", 1.0, True
         if s == DONE and d == ACTIVE:
             return "accent", 2.0, False
-        if s == DONE and d in (DONE, FAILED, BLOCKED):
+        if s == DONE and d in (DONE, FAILED, BLOCKED, TIMEOUT):
             return "success", 1.5, False
         return "border", 1.0, False
 
@@ -531,7 +536,7 @@ class PipelineGraphWidget(QGraphicsView):
         self._ml_collapsed = ml_collapsed and self._group is not None
         self.nodes: dict[str, NodeItem] = {}
         for stage in spec.stages:
-            node = NodeItem(stage)
+            node = NodeItem(stage, width=spec.node_width)
             self._scene.addItem(node)
             self.nodes[stage.key] = node
         self.ml_node: NodeItem | None = None
@@ -663,13 +668,14 @@ class PipelineGraphWidget(QGraphicsView):
         layout = group.layout_collapsed if collapsed else self.spec.layout
         lanes = self.spec.lanes
         ml_col = group.layout_collapsed[group.spec.key][0] if group else 0
-        shift_w = group.node_width - NODE_W if group else 0
+        shift_w = group.node_width - self.spec.node_width if group else 0
+        col_step = self.spec.col_step
 
         def place(item, key):
             col, lane = layout[key]
             # columns right of the wider collapsed group shift over
             shift = shift_w if collapsed and col > ml_col else 0
-            item.setPos(col * COL_STEP + shift, lanes[lane])
+            item.setPos(col * col_step + shift, lanes[lane])
 
         for key, node in self.nodes.items():
             visible = key in layout
@@ -687,7 +693,7 @@ class PipelineGraphWidget(QGraphicsView):
             self.group_frame.set_rect(QRectF(
                 first.x() - GROUP_PAD,
                 first.y() - GROUP_HEADER - 6,
-                last.x() - first.x() + NODE_W + 2 * GROUP_PAD,
+                last.x() - first.x() + self.spec.node_width + 2 * GROUP_PAD,
                 NODE_H + GROUP_HEADER + 6 + GROUP_PAD,
             ))
 

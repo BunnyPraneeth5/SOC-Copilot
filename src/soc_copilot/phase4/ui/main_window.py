@@ -443,6 +443,9 @@ class MainWindow(QMainWindow):
             self.alerts_view._trigger_investigation
         )
         self.alerts_view.report_drawer = self.report_drawer
+        self.bridge.investigationStageUpdated.connect(
+            self.report_drawer.on_investigation_stage
+        )
         self.page_splitter.addWidget(self.report_drawer)
         self.page_splitter.setCollapsible(1, False)
         self.page_splitter.setStretchFactor(0, 1)

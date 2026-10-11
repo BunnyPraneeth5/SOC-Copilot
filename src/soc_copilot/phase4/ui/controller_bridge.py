@@ -114,9 +114,15 @@ class ControllerBridge(QObject):
     _resultArrived = pyqtSignal()  # internal: raw listener callback relay
     pipelineStageUpdated = pyqtSignal(object)  # StageEvent (Milestone 6a)
 
-    def __init__(self, controller: AppController):
+    def __init__(
+        self,
+        controller: AppController,
+        orchestrator_factory: Optional[Callable[[], MCPOrchestrator]] = None,
+    ):
         super().__init__()
         self._controller = controller
+        # None -> MCPOrchestrator, looked up per investigation
+        self._orchestrator_factory = orchestrator_factory
         self._permission_status = None
         self._sources_added = 0
         self._process_lock = threading.Lock()  # Serialize pipeline access
@@ -173,7 +179,9 @@ class ControllerBridge(QObject):
             return False
 
         signals = InvestigationSignals()
-        worker = InvestigationWorker(normalized, signals)
+        worker = InvestigationWorker(
+            normalized, signals, self._orchestrator_factory or MCPOrchestrator
+        )
         signals.stageUpdated.connect(self.investigationStageUpdated)
         signals.reportReady.connect(self._on_investigation_ready)
 
