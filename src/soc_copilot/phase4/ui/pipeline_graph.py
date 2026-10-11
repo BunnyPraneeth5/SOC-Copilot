@@ -146,6 +146,45 @@ LAYOUT_COLLAPSED = {
 }
 
 
+@dataclass(frozen=True)
+class GroupSpec:
+    """Stages that can collapse into one node (e.g. the ML pipeline)."""
+
+    spec: StageSpec                 # the collapsed node (key, label, icon)
+    members: tuple[str, ...]        # member stage keys, in order
+    layout_collapsed: dict          # stage/group key -> (column, lane)
+    node_width: int = ML_NODE_W     # collapsed node also shows sub-stage
+
+
+@dataclass(frozen=True)
+class GraphSpec:
+    """What a graph shows: stages, edges, lanes and their layout."""
+
+    name: str                       # accessible name
+    stages: tuple[StageSpec, ...]
+    edges: tuple[tuple[str, str], ...]
+    lanes: dict                     # lane -> y
+    layout: dict                    # stage key -> (column, lane)
+    group: GroupSpec | None = None
+
+    @property
+    def labels(self) -> dict:
+        labels = {s.key: s.label for s in self.stages}
+        if self.group is not None:
+            labels[self.group.spec.key] = self.group.spec.label
+        return labels
+
+
+ANALYSIS_GRAPH = GraphSpec(
+    name="Pipeline graph",
+    stages=STAGES,
+    edges=EDGES,
+    lanes=LANE_Y,
+    layout=LAYOUT_EXPANDED,
+    group=GroupSpec(ML_GROUP_SPEC, ML_STAGES, LAYOUT_COLLAPSED),
+)
+
+
 def _token(name: str) -> QColor:
     return QColor(getattr(ThemeManager.instance().palette, name))
 
@@ -340,15 +379,16 @@ class NodeItem(QGraphicsObject):
 
 
 class GroupFrame(QGraphicsObject):
-    """Dashed frame + clickable "ML pipeline" header around the ML stages."""
+    """Dashed frame + clickable header around a group's stages."""
 
-    def __init__(self, on_click):
+    def __init__(self, on_click, label: str = "ML pipeline"):
         super().__init__()
         self._rect = QRectF()
         self._on_click = on_click
+        self.label = label
         self.setZValue(-1)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setToolTip("ML pipeline: click to collapse")
+        self.setToolTip(f"{label}: click to collapse")
 
     def set_rect(self, rect: QRectF) -> None:
         self.prepareGeometryChange()
@@ -382,7 +422,7 @@ class GroupFrame(QGraphicsObject):
         painter.drawText(
             QRectF(self._rect.left() + 26, self._rect.top() + 3, 200, 18),
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            "ML pipeline",
+            self.label,
         )
 
     def mousePressEvent(self, event) -> None:
@@ -453,15 +493,24 @@ class EdgeItem(QGraphicsItem):
 # ---------------------------------------------------------------------------
 
 class PipelineGraphWidget(QGraphicsView):
-    """Read-only graph of the analysis pipeline for the latest batch."""
+    """Read-only graph of a ``GraphSpec`` (default: the analysis pipeline)
+    for the latest run.
+
+    The ``ml_*`` names refer to the spec's collapsible group (the ML
+    pipeline in the analysis graph); a spec without a group has none.
+    """
 
     mlCollapsedChanged = pyqtSignal(bool)
     MAX_SCALE = 1.25
 
-    def __init__(self, parent=None, ml_collapsed: bool = False):
+    def __init__(self, parent=None, ml_collapsed: bool = False,
+                 spec: GraphSpec = ANALYSIS_GRAPH):
         super().__init__(parent)
+        self.spec = spec
+        self._labels = spec.labels
+        self._group = spec.group
         self.setObjectName("pipelineGraph")
-        self.setAccessibleName("Pipeline graph")
+        self.setAccessibleName(spec.name)
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -479,18 +528,23 @@ class PipelineGraphWidget(QGraphicsView):
         self.setScene(self._scene)
 
         self._batch_id: str | None = None
-        self._ml_collapsed = ml_collapsed
+        self._ml_collapsed = ml_collapsed and self._group is not None
         self.nodes: dict[str, NodeItem] = {}
-        for spec in STAGES:
-            node = NodeItem(spec)
+        for stage in spec.stages:
+            node = NodeItem(stage)
             self._scene.addItem(node)
-            self.nodes[spec.key] = node
-        self.ml_node = NodeItem(ML_GROUP_SPEC, on_click=self._expand_ml, width=ML_NODE_W)
-        self._scene.addItem(self.ml_node)
-        self.group_frame = GroupFrame(on_click=self._collapse_ml)
-        self._scene.addItem(self.group_frame)
+            self.nodes[stage.key] = node
+        self.ml_node: NodeItem | None = None
+        self.group_frame: GroupFrame | None = None
+        if self._group is not None:
+            self.ml_node = NodeItem(self._group.spec, on_click=self._expand_ml,
+                                    width=self._group.node_width)
+            self._scene.addItem(self.ml_node)
+            self.group_frame = GroupFrame(on_click=self._collapse_ml,
+                                          label=self._group.spec.label)
+            self._scene.addItem(self.group_frame)
         self.edges: list[tuple[str, str, EdgeItem]] = []
-        for src, dst in EDGES:
+        for src, dst in spec.edges:
             edge = EdgeItem(self.nodes[src], self.nodes[dst])
             self._scene.addItem(edge)
             self.edges.append((src, dst, edge))
@@ -505,13 +559,16 @@ class PipelineGraphWidget(QGraphicsView):
     def batch_id(self) -> str | None:
         return self._batch_id
 
+    def _is_group(self, key: str) -> bool:
+        return self._group is not None and key == self._group.spec.key
+
     def status(self, stage: str) -> str:
-        if stage == ML_GROUP:
+        if self._is_group(stage):
             return self.ml_node.status
         return self.nodes[stage].status
 
     def detail(self, stage: str) -> str:
-        if stage == ML_GROUP:
+        if self._is_group(stage):
             return self.ml_node.detail
         return self.nodes[stage].detail
 
@@ -545,22 +602,28 @@ class PipelineGraphWidget(QGraphicsView):
         self._update_description()
 
     def is_fading(self) -> bool:
-        return any(n.fading for n in (*self.nodes.values(), self.ml_node))
+        items = list(self.nodes.values())
+        if self.ml_node is not None:
+            items.append(self.ml_node)
+        return any(n.fading for n in items)
 
     def _refresh_ml_node(self, animate: bool = False) -> None:
-        statuses = [self.nodes[s].status for s in ML_STAGES]
+        if self._group is None:
+            return
+        members = self._group.members
+        statuses = [self.nodes[s].status for s in members]
         status = aggregate_status(statuses)
         current = next(
-            (s for s in ML_STAGES if self.nodes[s].status in (FAILED, ACTIVE)),
+            (s for s in members if self.nodes[s].status in (FAILED, ACTIVE)),
             None,
         )
         if current is None and status == ACTIVE:  # between two sub-stages
-            current = next(s for s in ML_STAGES if self.nodes[s].status == IDLE)
-        note = STAGE_LABELS[current] if current and status in (ACTIVE, FAILED) else ""
+            current = next(s for s in members if self.nodes[s].status == IDLE)
+        note = self._labels[current] if current and status in (ACTIVE, FAILED) else ""
         detail = "\n".join(
-            f"{STAGE_LABELS[s]}: {self.nodes[s].status_text()}"
+            f"{self._labels[s]}: {self.nodes[s].status_text()}"
             + (f" ({self.nodes[s].detail})" if self.nodes[s].detail else "")
-            for s in ML_STAGES
+            for s in members
         )
         self.ml_node.set_status(status, detail, note, animate=animate)
 
@@ -569,8 +632,8 @@ class PipelineGraphWidget(QGraphicsView):
             edge.update()
 
     def _update_description(self) -> None:
-        parts = [f"{spec.label} {STATUS_TEXT[self.nodes[spec.key].status].lower()}"
-                 for spec in STAGES]
+        parts = [f"{stage.label} {STATUS_TEXT[self.nodes[stage.key].status].lower()}"
+                 for stage in self.spec.stages]
         self.setAccessibleDescription("; ".join(parts))
 
     # -- ML group ----------------------------------------------------------
@@ -580,7 +643,7 @@ class PipelineGraphWidget(QGraphicsView):
         return self._ml_collapsed
 
     def set_ml_collapsed(self, collapsed: bool) -> None:
-        if collapsed == self._ml_collapsed:
+        if self._group is None or collapsed == self._ml_collapsed:
             return
         self._ml_collapsed = collapsed
         self._layout()
@@ -595,29 +658,32 @@ class PipelineGraphWidget(QGraphicsView):
     # -- layout ------------------------------------------------------------
 
     def _layout(self) -> None:
+        group = self._group
         collapsed = self._ml_collapsed
-        layout = LAYOUT_COLLAPSED if collapsed else LAYOUT_EXPANDED
-        ml_col = LAYOUT_COLLAPSED[ML_GROUP][0]
+        layout = group.layout_collapsed if collapsed else self.spec.layout
+        lanes = self.spec.lanes
+        ml_col = group.layout_collapsed[group.spec.key][0] if group else 0
+        shift_w = group.node_width - NODE_W if group else 0
 
         def place(item, key):
             col, lane = layout[key]
             # columns right of the wider collapsed group shift over
-            shift = ML_NODE_W - NODE_W if collapsed and col > ml_col else 0
-            item.setPos(col * COL_STEP + shift, LANE_Y[lane])
+            shift = shift_w if collapsed and col > ml_col else 0
+            item.setPos(col * COL_STEP + shift, lanes[lane])
 
         for key, node in self.nodes.items():
             visible = key in layout
             node.setVisible(visible)
             if visible:
                 place(node, key)
-        self.ml_node.setVisible(collapsed)
-        if collapsed:
-            place(self.ml_node, ML_GROUP)
-
-        self.group_frame.setVisible(not collapsed)
-        if not collapsed:
-            first = self.nodes[ML_STAGES[0]].pos()
-            last = self.nodes[ML_STAGES[-1]].pos()
+        if group is not None:
+            self.ml_node.setVisible(collapsed)
+            if collapsed:
+                place(self.ml_node, group.spec.key)
+            self.group_frame.setVisible(not collapsed)
+        if group is not None and not collapsed:
+            first = self.nodes[group.members[0]].pos()
+            last = self.nodes[group.members[-1]].pos()
             self.group_frame.set_rect(QRectF(
                 first.x() - GROUP_PAD,
                 first.y() - GROUP_HEADER - 6,
@@ -640,7 +706,7 @@ class PipelineGraphWidget(QGraphicsView):
         self._fit()
 
     def _endpoint(self, stage: str) -> NodeItem:
-        if self._ml_collapsed and stage in ML_STAGES:
+        if self._ml_collapsed and stage in self._group.members:
             return self.ml_node
         return self.nodes[stage]
 
