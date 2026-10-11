@@ -17,6 +17,7 @@ only needs a repaint.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 from PyQt6.QtCore import (
@@ -26,6 +27,7 @@ from PyQt6.QtCore import (
     QRectF,
     QSize,
     Qt,
+    QTimer,
     pyqtProperty,
     pyqtSignal,
 )
@@ -41,6 +43,7 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtWidgets import (
     QFrame,
+    QGraphicsEllipseItem,
     QGraphicsItem,
     QGraphicsObject,
     QGraphicsScene,
@@ -464,6 +467,14 @@ class EdgeItem(QGraphicsItem):
         self._path = path
         self._head = QPolygonF([b + QPointF(6, 0), b + QPointF(0, -4), b + QPointF(0, 4)])
 
+    def point_at(self, t: float) -> QPointF:
+        """Point at fraction ``t`` (0..1) along the connection."""
+        return self._path.pointAtPercent(min(1.0, max(0.0, t)))
+
+    def is_flowing(self) -> bool:
+        """Work is moving along this edge: source done, target running."""
+        return self.isVisible() and self.style()[0] == "accent"
+
     def style(self) -> tuple[str, float, bool]:
         """(token, width, dashed) for the current endpoint statuses."""
         s, d = self.src.status, self.dst.status
@@ -493,6 +504,24 @@ class EdgeItem(QGraphicsItem):
         painter.drawPolygon(self._head)
 
 
+class PacketItem(QGraphicsEllipseItem):
+    """Small dot travelling along an edge into a running stage."""
+
+    RADIUS = 3.5
+
+    def __init__(self):
+        r = self.RADIUS
+        super().__init__(-r, -r, 2 * r, 2 * r)
+        self.setZValue(-0.25)  # above edges, below nodes
+        self.setPen(QPen(Qt.PenStyle.NoPen))
+        self.edge: EdgeItem | None = None
+
+    def paint(self, painter: QPainter, option, widget=None) -> None:
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(_token("accent")))
+        painter.drawEllipse(self.rect())
+
+
 # ---------------------------------------------------------------------------
 # View
 # ---------------------------------------------------------------------------
@@ -507,6 +536,9 @@ class PipelineGraphWidget(QGraphicsView):
 
     mlCollapsedChanged = pyqtSignal(bool)
     MAX_SCALE = 1.25
+    MAX_PACKETS = 4
+    PACKET_MS = 1100   # one trip along an edge
+    PACKET_FPS = 30
 
     def __init__(self, parent=None, ml_collapsed: bool = False,
                  spec: GraphSpec = ANALYSIS_GRAPH):
@@ -554,6 +586,14 @@ class PipelineGraphWidget(QGraphicsView):
             self._scene.addItem(edge)
             self.edges.append((src, dst, edge))
 
+        # Packet animation (Milestone 6b): a timer owned by the view, so it
+        # dies with it; motion is re-checked on every frame (Reduce motion
+        # can change without a signal)
+        self.packets: list[PacketItem] = []
+        self._packet_timer = QTimer(self)
+        self._packet_timer.setInterval(1000 // self.PACKET_FPS)
+        self._packet_timer.timeout.connect(self._tick_packets)
+
         self._layout()
         self._update_description()
         ThemeManager.instance().theme_changed.connect(self._on_theme_changed)
@@ -585,6 +625,7 @@ class PipelineGraphWidget(QGraphicsView):
         self._refresh_ml_node()
         self._refresh_edges()
         self._update_description()
+        self._update_packets()
 
     def apply_event(self, event, animate: bool | None = None) -> None:
         """Apply one ``StageEvent``; a new ``batch_id`` starts a fresh run.
@@ -605,6 +646,7 @@ class PipelineGraphWidget(QGraphicsView):
         self._refresh_ml_node(animate)
         self._refresh_edges()
         self._update_description()
+        self._update_packets()
 
     def is_fading(self) -> bool:
         items = list(self.nodes.values())
@@ -710,6 +752,7 @@ class PipelineGraphWidget(QGraphicsView):
                 bounds = bounds.united(item.mapRectToScene(item.boundingRect()))
         self._scene.setSceneRect(bounds.adjusted(-8, -8, 8, 8))
         self._fit()
+        self._update_packets()
 
     def _endpoint(self, stage: str) -> NodeItem:
         if self._ml_collapsed and stage in self._group.members:
@@ -732,6 +775,61 @@ class PipelineGraphWidget(QGraphicsView):
     def showEvent(self, event) -> None:
         super().showEvent(event)
         self._fit()
+        self._update_packets()
+
+    def hideEvent(self, event) -> None:
+        super().hideEvent(event)
+        self._stop_packets()
+
+    # -- packet animation ----------------------------------------------------
+
+    @property
+    def packets_running(self) -> bool:
+        return self._packet_timer.isActive()
+
+    def visible_packets(self) -> list[PacketItem]:
+        return [p for p in self.packets if p.isVisible()]
+
+    def _flowing_edges(self) -> list[EdgeItem]:
+        return [e for _, _, e in self.edges if e.is_flowing()][: self.MAX_PACKETS]
+
+    def _update_packets(self) -> None:
+        """Start, retarget or stop packets after a state change."""
+        edges = self._flowing_edges()
+        if not edges or not motion_enabled(self):
+            self._stop_packets()
+            return
+        while len(self.packets) < len(edges):
+            packet = PacketItem()
+            self._scene.addItem(packet)
+            self.packets.append(packet)
+        for packet, edge in zip(self.packets, edges):
+            packet.edge = edge
+        for packet in self.packets[len(edges):]:
+            packet.edge = None
+            packet.hide()
+        self._tick_packets()
+        if not self._packet_timer.isActive():
+            self._packet_timer.start()
+
+    def _tick_packets(self) -> None:
+        if not motion_enabled(self):
+            self._stop_packets()
+            return
+        phase = (time.monotonic() * 1000.0 % self.PACKET_MS) / self.PACKET_MS
+        for i, packet in enumerate(self.packets):
+            if packet.edge is None:
+                continue
+            # stagger parallel packets so they do not move in lockstep
+            t = (phase + i * 0.17) % 1.0
+            packet.setPos(packet.edge.point_at(t))
+            packet.show()
+
+    def _stop_packets(self) -> None:
+        self._packet_timer.stop()
+        for packet in self.packets:
+            packet.edge = None
+            packet.hide()
 
     def set_preferred_height(self, height: int) -> None:
         """Height the layout should give the graph when there is room."""
@@ -752,6 +850,7 @@ class PipelineGraphWidget(QGraphicsView):
     def _on_theme_changed(self, *_args) -> None:
         self._scene.update()
         self.viewport().update()
+        self._update_packets()
 
     def wheelEvent(self, event) -> None:
         event.ignore()  # never scroll/zoom the graph; let the page scroll
