@@ -66,6 +66,10 @@ data/drift/*.db
 data/feedback/*.db
 data/governance/*.db
 data/ioc_database/*.db
+# SQLite journal / WAL files written next to any database while it is open
+*.db-journal
+*.db-wal
+*.db-shm
 
 # ========================
 # SOC Copilot - Runtime
